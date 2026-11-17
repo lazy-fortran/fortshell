@@ -368,6 +368,17 @@ async function boot() {
     imports = imports.then(() => importFile($('file').files[0])).catch(error);
   });
   $('title').addEventListener('input', metaChanged);
+  $('clear-page').onclick = () => {
+    if (!ready || operation) return;
+    if (current) endStroke(false);
+    const page = M._fs_current();
+    for (let id = 1; id <= M._fs_count(); id++) {
+      if (M._fs_visible(id) && M._fs_stroke_page(id) === page) {
+        M._fs_toggle(id); checkpoint(id, true);
+      }
+    }
+    redrawCommitted(); refreshControls();
+  };
   $('compare-toggle').onclick = () => {
     $('compare').hidden = !$('compare').hidden;
     $('compare-toggle').setAttribute('aria-expanded', String(!$('compare').hidden));

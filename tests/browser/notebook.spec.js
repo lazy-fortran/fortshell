@@ -498,3 +498,15 @@ test('sparse vector PDF ink keeps its body width and tapered caps', async ({ pag
     expect(cap).toBeGreaterThan(6); expect(cap).toBeLessThan(7);
   }
 });
+
+test('clear page removes saved ink on this page and preserves other pages', async ({ page }) => {
+  await open(page); await draw(page);
+  await page.locator('[data-id=next]').click(); await draw(page);
+  await page.locator('#clear-page').click();
+  expect(await darkPixels(page)).toBe(0);
+  await page.evaluate(() => window.fortshell.flush());
+  await page.reload(); await page.waitForFunction(() => window.fortshell?.ready);
+  expect(await darkPixels(page)).toBe(0);
+  await page.locator('[data-id=previous]').click();
+  await expect.poll(() => darkPixels(page)).toBeGreaterThan(100);
+});
