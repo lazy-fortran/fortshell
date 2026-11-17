@@ -169,6 +169,54 @@ test('unchanged workspace observation preserves the canvas and a real resize upd
   await expect.poll(() => page.evaluate(() => window.fortshell.pageRevision)).toBeGreaterThan(revision);
 });
 
+test('Retina ink stays at display density after zooming and scrolling', async ({ browser, baseURL }) => {
+  const page = await browser.newPage({ baseURL, serviceWorkers: 'block',
+    viewport: { width: 1194, height: 834 }, deviceScaleFactor: 2 });
+  try {
+    await open(page);
+    // This mark starts outside the viewport at maximum zoom.
+    await page.evaluate(async () => {
+      const f = window.fortshell, M = f.module;
+      M._fs_begin(1.5, 0, 2);
+      M.HEAPF32.set([270, 187, 0, 0.5], M._fs_input() / 4);
+      M.HEAPF32.set([270, 187, 0.75], M._fs_output() / 4);
+      M._fs_append(1); M._fs_finish(0); await f.requestPage();
+      document.getElementById('workspace').dispatchEvent(new WheelEvent('wheel', {
+        deltaY: -280, ctrlKey: true, cancelable: true,
+      }));
+      await f.requestPage();
+    });
+    const initial = await page.evaluate(() => {
+      const canvas = document.getElementById('committed'), rect = canvas.getBoundingClientRect();
+      const workspace = document.getElementById('workspace');
+      const size = [canvas.width / rect.width, canvas.height / rect.height];
+      workspace.scrollTo(workspace.scrollWidth, workspace.scrollHeight);
+      return { size, width: canvas.width, height: canvas.height, dpr: devicePixelRatio };
+    });
+    expect(initial.dpr).toBe(2);
+    expect(initial.size[0]).toBeCloseTo(2, 2); expect(initial.size[1]).toBeCloseTo(2, 2);
+    expect(initial.width).toBeLessThanOrEqual(1194 * 2 + 256);
+    expect(initial.height).toBeLessThanOrEqual(834 * 2 + 256);
+    const mark = () => page.evaluate(() => {
+      const canvas = document.getElementById('committed'), rect = canvas.getBoundingClientRect();
+      const paper = document.getElementById('paper').getBoundingClientRect();
+      const x = Math.floor((paper.left + 270 / 297 * paper.width - rect.left) * devicePixelRatio);
+      const y = Math.floor((paper.top + 187 / 210 * paper.height - rect.top) * devicePixelRatio);
+      return canvas.getContext('2d').getImageData(x, y, 1, 1).data[3];
+    });
+    await expect.poll(mark).toBe(255);
+    await page.mouse.click(760, 490);
+    const error = await page.evaluate(() => {
+      const f = window.fortshell, M = f.module;
+      const paper = document.getElementById('paper').getBoundingClientRect();
+      const raw = new Float32Array(M.HEAPU8.buffer, M._fs_data(2, 0), 4);
+      return Math.hypot(raw[0] - (760 - paper.left) / paper.width * 297,
+        raw[1] - (490 - paper.top) / paper.height * 210);
+    });
+    expect(error).toBeLessThan(0.001);
+  } finally { await page.close(); }
+});
+
 test('a pending save does not delay the next pen contact or resize the page', async ({ page }) => {
   await open(page); await page.evaluate(() => window.fortshell.flush());
   await page.evaluate(() => {
@@ -465,6 +513,43 @@ test('stationary pen samples do not darken the antialiased edge', async ({ page 
   expect(result.changed).toBe(0);
 });
 
+test('ink edges follow geometric pixel coverage', async ({ page }) => {
+  await open(page);
+  const rms = await page.evaluate(async () => {
+    const f = window.fortshell, M = f.module, c = document.getElementById('committed');
+    const sx = c.width / 297, sy = c.height / 210;
+    const lines = [0.03, 0.08, 0.12, 0.21, 0.37, 0.58, 1, -1, 0.43, 0.64, 0.07, 0.12].map((slope, i) => {
+      const centre = 22 + 14 * i + i / 21, first = Math.fround(centre - 13 * slope), last = Math.fround(centre + 13 * slope);
+      M._fs_begin(0.74, 0, 2);
+      M.HEAPF32.set([132, first, 0, 0.5, 158, last, 1, 0.5], M._fs_input() / 4);
+      M.HEAPF32.set([132, first, 0.37, 158, last, 0.37], M._fs_output() / 4);
+      M._fs_append(2); M._fs_finish(0);
+      return [first, (last - first) / 26];
+    });
+    await f.requestPage();
+    const pixels = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+    let error = 0, count = 0;
+    for (const [first, slope] of lines) {
+      const radius = 0.37 * sy * Math.hypot(1, slope);
+      for (let x = Math.round(142 * sx); x < Math.round(148 * sx); x++) {
+        const centre = sy * (first + slope * ((x + 0.5) / sx - 132));
+        for (let y = Math.floor(centre - radius - 2); y < Math.ceil(centre + radius + 2); y++) {
+          let coverage = 0;
+          for (let i = 0; i < 128; i++) {
+            const at = sy * (first + slope * ((x + (i + 0.5) / 128) / sx - 132));
+            coverage += Math.max(0, Math.min(y + 1, at + radius) - Math.max(y, at - radius)) / 128;
+          }
+          if (coverage <= 0 || coverage >= 1) continue;
+          error += (coverage - pixels[4 * (y * c.width + x) + 3] / 255) ** 2;
+          count++;
+        }
+      }
+    }
+    return Math.sqrt(error / count);
+  });
+  expect(rms).toBeLessThan(0.04);
+});
+
 test('live curved ink keeps identical edge coverage at lift-off', async ({ page }) => {
   await open(page); await page.locator('#compare-toggle').click();
   await page.locator('#engine').selectOption('raw');
@@ -572,7 +657,7 @@ test('clear page removes saved ink on this page and preserves other pages', asyn
 test('predicted ink shares the pen taper and disappears when measurements replace it', async ({ page }) => {
   await open(page); await page.locator('#compare-toggle').click(); await page.locator('#engine').selectOption('raw');
   const result = await page.evaluate(async () => {
-    const c = document.getElementById('active'), b = c.getBoundingClientRect();
+    const c = document.getElementById('active'), b = document.getElementById('paper').getBoundingClientRect();
     c.setPointerCapture = () => {}; c.hasPointerCapture = () => false;
     window.fortshell.module._fs_width(10);
     const x = 140, y = 105, scale = b.width / 297;

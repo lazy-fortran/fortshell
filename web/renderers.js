@@ -1,8 +1,8 @@
 import { InkShape, INK_CHUNK, INK } from './geometry.js';
 
 const colour = [23 / 255, 33 / 255, 43 / 255, 1];
-export async function createRenderer(canvas, backend, width, height) {
-  if (backend === 'canvas') return new CanvasRenderer(canvas, width, height);
+export async function createRenderer(canvas, backend, width, height, view) {
+  if (backend === 'canvas') return new CanvasRenderer(canvas, width, height, view);
   if (backend === 'webgl') return new GLRenderer(canvas, width, height);
   if (backend === 'webgpu') return GPUrenderer.create(canvas, width, height);
   throw new Error(`Unknown renderer: ${backend}`);
@@ -13,26 +13,33 @@ function union(a, b) {
 }
 function intersects(a, b) { return a[0] <= b[2] && a[2] >= b[0] && a[1] <= b[3] && a[3] >= b[1]; }
 
+function pixelBounds(bounds, { x, y, sx, sy }, canvas) {
+  const left = Math.max(0, Math.floor(bounds[0] * sx - x) - 2);
+  const top = Math.max(0, Math.floor(bounds[1] * sy - y) - 2);
+  const right = Math.min(canvas.width, Math.ceil(bounds[2] * sx - x) + 2);
+  const bottom = Math.min(canvas.height, Math.ceil(bounds[3] * sy - y) + 2);
+  return [left, top, Math.max(0, right - left), Math.max(0, bottom - top)];
+}
+
 function prepare(renderer, points, first, width, live, predicted) {
   // Bound Canvas tip work without fragmenting mesh uploads.
   const chunkSize = live && renderer.ctx ? INK_CHUNK : 64;
   const shape = live ? (renderer.shape ||= new InkShape(chunkSize)) : new InkShape(chunkSize);
   const oldChunks = shape.chunks;
-  const from = shape.update(points, first, width, predicted), scale = renderer.canvas.width / renderer.width;
+  const { canvas } = renderer;
+  const view = renderer.raster || { x: 0, y: 0, sx: canvas.width / renderer.width, sy: canvas.height / renderer.height };
+  const from = shape.update(points, first, width, predicted);
   let bounds = [Infinity, Infinity, -Infinity, -Infinity];
   for (let i = from; i < oldChunks.length; i++) bounds = union(bounds, oldChunks[i].bounds);
   for (let i = from; i * chunkSize < shape.points.length; i++) {
     const start = i * chunkSize, end = Math.min(start + chunkSize, shape.points.length);
     const chunk = { bounds: shape.bounds(start, end) };
     if (renderer.ctx) { chunk.path = new Path2D(); shape.path(chunk.path, start, end); }
-    else chunk.mesh = shape.mesh(start, end, scale);
+    else chunk.mesh = shape.mesh(start, end, Math.max(view.sx, view.sy));
     shape.chunks[i] = chunk; bounds = union(bounds, chunk.bounds);
   }
   shape.chunks.length = Math.ceil(shape.points.length / chunkSize);
-  const x = Math.max(0, Math.floor(bounds[0] * scale) - 2), y = Math.max(0, Math.floor(bounds[1] * scale) - 2);
-  const right = Math.min(renderer.canvas.width, Math.ceil(bounds[2] * scale) + 2);
-  const bottom = Math.min(renderer.canvas.height, Math.ceil(bounds[3] * scale) + 2);
-  const clip = [x, y, Math.max(0, right - x), Math.max(0, bottom - y)];
+  const clip = pixelBounds(bounds, view, canvas);
   const chunks = shape.chunks.filter(c => intersects(c.bounds, bounds));
   return { chunks, clip };
 }
@@ -43,11 +50,27 @@ function vertices(chunks) {
   return output;
 }
 
+const COVERAGE_TILE = 128;
+
 class CanvasRenderer {
-  constructor(canvas, width, height) {
+  constructor(canvas, width, height, view) {
     this.canvas = canvas; this.width = width; this.height = height;
     this.ctx = canvas.getContext('2d', { alpha: true });
     if (!this.ctx) throw new Error('Canvas 2D unavailable');
+    if (view) this.setView(view);
+    else this.raster = { x: 0, y: 0, sx: canvas.width / width, sy: canvas.height / height };
+  }
+  setView(view) {
+    const { canvas } = this, previous = this.raster;
+    canvas.style.left = `${view.left}px`; canvas.style.top = `${view.top}px`;
+    canvas.style.width = `${view.width / view.dpr}px`; canvas.style.height = `${view.height / view.dpr}px`;
+    const changed = !previous || previous.x !== view.x || previous.y !== view.y || previous.sx !== view.sx ||
+      previous.sy !== view.sy || canvas.width !== view.width || canvas.height !== view.height;
+    if (!changed) return false;
+    if (canvas.width !== view.width) canvas.width = view.width;
+    if (canvas.height !== view.height) canvas.height = view.height;
+    this.raster = view; this.clear();
+    return true;
   }
   clear() {
     this.shape = null;
@@ -56,15 +79,39 @@ class CanvasRenderer {
   }
   draw(points, first = 0, width, live = false, predicted = []) {
     if (!points.length) return;
-    const c = this.ctx, { chunks, clip } = prepare(this, points, first, width, live, predicted);
-    if (!clip[2] || !clip[3]) return;
-    c.save(); c.setTransform(1, 0, 0, 1, 0, 0);
-    c.beginPath(); c.rect(...clip); c.clip();
-    if (live) c.clearRect(...clip);
-    c.setTransform(this.canvas.width / this.width, 0, 0, this.canvas.height / this.height, 0, 0);
-    const path = new Path2D();
-    for (const chunk of chunks) path.addPath(chunk.path);
-    c.fillStyle = INK; c.fill(path); c.restore();
+    const { chunks, clip } = prepare(this, points, first, width, live, predicted);
+    this.paint(chunks, clip, live);
+  }
+  paint(chunks, [left, top, width, height], live) {
+    if (!width || !height) return;
+    const { ctx, raster: { x, y, sx, sy } } = this;
+    if (!this.coverage) {
+      const canvas = this.canvas.ownerDocument.createElement('canvas');
+      canvas.width = canvas.height = COVERAGE_TILE * 2;
+      this.coverage = canvas.getContext('2d');
+    }
+    const coverage = this.coverage;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    if (live) ctx.clearRect(left, top, width, height);
+    for (let row = top; row < top + height; row += COVERAGE_TILE) {
+      const h = Math.min(COVERAGE_TILE, top + height - row);
+      for (let column = left; column < left + width; column += COVERAGE_TILE) {
+        const w = Math.min(COVERAGE_TILE, left + width - column);
+        const bounds = [(column + x) / sx, (row + y) / sy, (column + x + w) / sx, (row + y + h) / sy];
+        const path = new Path2D();
+        let visible = false;
+        for (const chunk of chunks) if (intersects(chunk.bounds, bounds)) {
+          path.addPath(chunk.path); visible = true;
+        }
+        if (!visible) continue;
+        // Reuse a small surface to average adjacent samples at the display pixel grid.
+        coverage.setTransform(1, 0, 0, 1, 0, 0);
+        coverage.clearRect(0, 0, w * 2, h * 2);
+        coverage.setTransform(2 * sx, 0, 0, 2 * sy, -2 * (x + column), -2 * (y + row));
+        coverage.fillStyle = INK; coverage.fill(path);
+        ctx.drawImage(coverage.canvas, 0, 0, w * 2, h * 2, column, row, w, h);
+      }
+    }
   }
   commit(target, points, width, drawn) {
     const tip = this.shape?.points.at(-1), at = points.length - 3;

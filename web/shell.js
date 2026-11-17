@@ -58,6 +58,23 @@ function download(bytes, name, type) {
 }
 function name(extension) { return ($('title').value.trim() || 'Notebook').replace(/[\\/:*?"<>|]/g, '_') + extension; }
 
+function inkViewport(width, height) {
+  const paper = $('paper').getBoundingClientRect(), workspace = $('workspace');
+  const visible = workspace.getBoundingClientRect(), dpr = devicePixelRatio || 1;
+  const tile = 128;
+  const axis = (start, size, clipStart, clipSize) => {
+    const origin = Math.round(start * dpr), full = Math.max(1, Math.round(size * dpr));
+    // Expand to fixed pixel boundaries so small scrolls reuse the same raster.
+    const first = Math.min(full - 1, Math.max(0, Math.floor((clipStart * dpr - origin) / tile) * tile));
+    const last = Math.min(full, Math.ceil(((clipStart + clipSize) * dpr - origin) / tile) * tile);
+    return { offset: first, size: Math.max(1, last - first), full, css: (origin + first) / dpr - start };
+  };
+  const x = axis(paper.left, paper.width, visible.left + workspace.clientLeft, workspace.clientWidth);
+  const y = axis(paper.top, paper.height, visible.top + workspace.clientTop, workspace.clientHeight);
+  return { x: x.offset, y: y.offset, width: x.size, height: y.size, left: x.css, top: y.css,
+    sx: x.full / width, sy: y.full / height, dpr };
+}
+
 async function renderPage() {
   if (current) return;
   const generation = ++renderGeneration, page = M._fs_current(), [width, height] = pageSize();
@@ -69,24 +86,28 @@ async function renderPage() {
   const cssHeight = cssWidth * height / width;
   $('paper').style.width = `${cssWidth}px`; $('paper').style.height = `${cssHeight}px`;
   $('paper').setAttribute('aria-label', `Page ${page}`);
-  // Bound backing-store area on high-DPI phones and very large zoom levels.
+  // PDF backgrounds and the comparison backends still use page-sized surfaces.
   const dpr = Math.min(devicePixelRatio || 1, 3, Math.sqrt(8e6 / (cssWidth * cssHeight)));
+  const view = renderer === 'canvas' ? inkViewport(width, height) : null;
   for (const id of ['committed', 'active']) {
     const old = $(id), canvas = old.dataset.backend === renderer ? old : old.cloneNode(false);
     canvas.dataset.backend = renderer;
-    canvas.width = Math.max(1, Math.ceil(cssWidth * dpr));
-    canvas.height = Math.max(1, Math.ceil(cssHeight * dpr));
+    if (!view) {
+      canvas.removeAttribute('style');
+      canvas.width = Math.max(1, Math.ceil(cssWidth * dpr));
+      canvas.height = Math.max(1, Math.ceil(cssHeight * dpr));
+    }
     if (old !== canvas) old.replaceWith(canvas);
   }
-  $('background').width = $('active').width; $('background').height = $('active').height;
-  const nextCommitted = await createRenderer($('committed'), renderer, width, height);
-  const nextActive = await createRenderer($('active'), renderer, width, height);
+  const nextCommitted = await createRenderer($('committed'), renderer, width, height, view);
+  const nextActive = await createRenderer($('active'), renderer, width, height, view);
   if (generation !== renderGeneration) { nextCommitted.dispose(); nextActive.dispose(); return; }
   committed = nextCommitted; activeRenderer = nextActive;
   for (let id = 1; id <= M._fs_count(); id++) {
     if (M._fs_visible(id) && M._fs_stroke_page(id) === page) drawStroke(committed, id);
   }
-  if (pdf && page <= pdfPages) await renderPDF(pdf, page, $('background'), $('active').width);
+  if (pdf && page <= pdfPages) await renderPDF(pdf, page, $('background'), Math.ceil(cssWidth * dpr));
+  else $('background').width = $('background').height = 1;
   if (generation !== renderGeneration) return;
   surface = new PointerSurface($('active'), { start: startStroke, samples: appendSamples,
     end: endStroke });
@@ -103,7 +124,7 @@ function requestPageStrict() {
   return next;
 }
 function coordinates(s) {
-  const rect = $('active').getBoundingClientRect(), [w, h] = pageSize();
+  const rect = $('paper').getBoundingClientRect(), [w, h] = pageSize();
   return [Math.max(0, Math.min(w, (s.x - rect.left) / rect.width * w)),
     Math.max(0, Math.min(h, (s.y - rect.top) / rect.height * h)), s.t,
     Math.max(0, Math.min(1, s.pressure ?? 0.5))];
@@ -186,7 +207,8 @@ function drawPerfect(target, id, preview = []) {
   const outline = perfectOutline(input, M._fs_meta(id, 0));
   const c = target.ctx;
   if (!c) throw new Error('The reference outline requires Canvas 2D');
-  c.setTransform(target.canvas.width / target.width, 0, 0, target.canvas.height / target.height, 0, 0);
+  const { x, y, sx, sy } = target.raster;
+  c.setTransform(sx, 0, 0, sy, -x, -y);
   c.beginPath(); outline.forEach((p, i) => i ? c.lineTo(...p) : c.moveTo(...p));
   c.closePath(); c.fillStyle = INK; c.fill();
 }
@@ -231,6 +253,18 @@ function redrawCommitted() {
   committed.clear();
   for (let id = 1; id <= M._fs_count(); id++) if (M._fs_visible(id)
       && M._fs_stroke_page(id) === M._fs_current()) drawStroke(committed, id);
+}
+
+function scrollInk() {
+  if (renderer !== 'canvas' || !surface) return;
+  const view = inkViewport(...pageSize()), changed = committed.setView(view);
+  activeRenderer.setView(view);
+  if (!changed) return;
+  redrawCommitted();
+  if (current > 0) {
+    cancelAnimationFrame(frame);
+    drawn = 0; drawActive();
+  }
 }
 
 function snapshot() {
@@ -440,6 +474,10 @@ async function boot() {
   $('zoom-reset').onclick = () => setZoom(1);
   let resizeTimer;
   const workspace = $('workspace');
+  let scrollFrame = 0;
+  workspace.addEventListener('scroll', () => {
+    if (!scrollFrame) scrollFrame = requestAnimationFrame(() => { scrollFrame = 0; scrollInk(); });
+  }, { passive: true });
   let workspaceWidth = workspace.clientWidth, workspaceHeight = workspace.clientHeight;
   new ResizeObserver(() => {
     const width = workspace.clientWidth, height = workspace.clientHeight;
