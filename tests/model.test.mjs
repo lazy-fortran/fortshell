@@ -57,6 +57,32 @@ test('sparse straight strokes keep full body width between tapered caps', () => 
   assert.equal(shape.points.at(-1)[0], 30);
 });
 
+test('close samples suppress transverse wobble while preserving ends and sharp turns', () => {
+  const shape = new InkShape();
+  const samples = Array.from({ length: 101 }, (_, i) => [i * 0.31, (i % 2 ? 1 : -1) * 0.06, 0.525]);
+  shape.update(Float32Array.from(samples.flat()), 0, 1.5);
+  assert.ok(shape.points.slice(1, -1).every(p => Math.abs(p[1]) < 0.012));
+  assert.ok(Math.abs(shape.points[0][1] + 0.06) < 1e-7);
+  assert.ok(Math.abs(shape.points.at(-1)[1] + 0.06) < 1e-7);
+
+  shape.update(new Float32Array([0, 0, 0.5, 0.5, 0, 0.5, 0.5, 0.5, 0.5, 0, 0.5, 0.5]), 0, 1.5);
+  assert.deepEqual(shape.points.map(p => p.slice(0, 2)), [[0, 0], [0.5, 0], [0.5, 0.5], [0, 0.5]]);
+});
+
+test('sparse curves recover the arc without moving its endpoints', () => {
+  const input = Float32Array.from(Array.from({ length: 5 }, (_, i) =>
+    [12 * Math.cos(i * Math.PI / 8), 12 * Math.sin(i * Math.PI / 8), 0.525]).flat());
+  const shape = new InkShape();
+  shape.update(input, 0, 1.5);
+  assert.ok(shape.points.every(p => Math.abs(Math.hypot(p[0], p[1]) - 12) < 0.012));
+  assert.deepEqual(shape.points[0], Array.from(input.subarray(0, 3)));
+  assert.deepEqual(shape.points.at(-1), Array.from(input.subarray(-3)));
+  const original = shape.mesh();
+  const dwell = new Float32Array([...input, ...input.subarray(-3)]);
+  shape.update(dwell, input.length / 3, 1.5);
+  assert.deepEqual(shape.mesh(), original);
+});
+
 test('replacing a forecast restores measured geometry across chunk boundaries', () => {
   const input = new Float32Array(130 * 3);
   for (let i = 0; i < 130; i++) input.set([i, Math.sin(i / 10), 0.5], i * 3);
