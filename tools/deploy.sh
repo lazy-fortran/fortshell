@@ -9,7 +9,7 @@ for file in index.html main.js main.wasm shell.js sw.js
 do
     test -s "$root/build/web/$file"
 done
-tar -C "$root/build/web" --exclude=obj --exclude='*.map' -czf "$archive" .
+COPYFILE_DISABLE=1 tar --no-xattrs -C "$root/build/web" --exclude=obj --exclude='*.map' -czf "$archive" .
 scp -q "$archive" "$target:/tmp/fortshell-web.tgz"
 scp -q "$root/deploy/nginx.conf" "$target:/tmp/fortshell-nginx.conf"
 ssh "$target" 'bash -s' <<'REMOTE'
@@ -42,8 +42,22 @@ BOOTSTRAP
     rm -f /etc/nginx/sites-enabled/fortshell-bootstrap.conf /etc/nginx/sites-available/fortshell-bootstrap.conf
 fi
 
-previous=$(readlink -f /srv/fortshell/current || true)
-ln -s "$release" /srv/fortshell/current.next
+mkdir -p /etc/letsencrypt/renewal-hooks/deploy
+cat > /etc/letsencrypt/renewal-hooks/deploy/fortshell <<'HOOK'
+#!/bin/sh
+set -eu
+case " ${RENEWED_DOMAINS:-} " in
+    *" ink.sloppy.at "*)
+        nginx -t
+        systemctl reload nginx
+        ;;
+esac
+HOOK
+chmod 0755 /etc/letsencrypt/renewal-hooks/deploy/fortshell
+
+previous=
+if [ -L /srv/fortshell/current ]; then previous=$(readlink -f /srv/fortshell/current); fi
+ln -sfn "$release" /srv/fortshell/current.next
 mv -Tf /srv/fortshell/current.next /srv/fortshell/current
 install -m 0644 /tmp/fortshell-nginx.conf /etc/nginx/sites-available/fortshell.conf
 rm -f /tmp/fortshell-nginx.conf
