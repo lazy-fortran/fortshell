@@ -89,6 +89,92 @@ test('pointer-rate drawing does not recompose the toolbar for each sample', asyn
   expect(await page.evaluate(() => window.toolbarSteps)).toBeLessThanOrEqual(2);
 });
 
+test('a light first pen contact paints immediately without a control update', async ({ page }) => {
+  await open(page);
+  await page.evaluate(() => {
+    window.firstContactSteps = 0;
+    const M = window.fortshell.module, step = M._fortui_web_step;
+    M._fortui_web_step = (...args) => { window.firstContactSteps++; return step(...args); };
+    document.getElementById('active').addEventListener('pointerdown', e => {
+      Object.defineProperty(e, 'pointerType', { value: 'pen' });
+      Object.defineProperty(e, 'pressure', { value: 0.01 });
+    }, { capture: true, once: true });
+  });
+  const box = await page.locator('#active').boundingBox();
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  const first = await page.evaluate(() => {
+    const M = window.fortshell.module, points = new Float32Array(M.HEAPU8.buffer, M._fs_data(1, 1), 3);
+    const c = document.getElementById('active'), pixels = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+    return { steps: window.firstContactSteps, size: M._fs_size(1), width: points[2] * 2,
+      visible: pixels.some((value, i) => i % 4 === 3 && value > 127) };
+  });
+  expect(first.steps).toBe(0); expect(first.size).toBe(1);
+  expect(first.width).toBeGreaterThan(0.25); expect(first.visible).toBe(true);
+  await page.mouse.up();
+});
+
+test('palm contacts before and after a pen stroke cannot move or select the page', async ({ page }) => {
+  await open(page);
+  const revision = await page.evaluate(() => window.fortshell.pageRevision);
+  const palm = () => page.evaluate(() => {
+    const canvas = document.getElementById('active');
+    canvas.setPointerCapture = () => {}; canvas.hasPointerCapture = () => false;
+    for (const [type, x] of [['pointerdown', 200], ['pointermove', 20], ['pointerup', 20]]) {
+      canvas.dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true,
+        pointerType: 'touch', pointerId: 90, clientX: x, clientY: 300, button: 0 }));
+    }
+    return { page: window.fortshell.module._fs_current(), transform: document.getElementById('paper').style.transform,
+      selection: getSelection().toString(),
+      selectionPrevented: !canvas.dispatchEvent(new Event('selectstart', { bubbles: true, cancelable: true })) };
+  });
+  let state = await palm();
+  expect(state.page).toBe(1); expect(state.transform).toBe(''); expect(state.selection).toBe('');
+  expect(state.selectionPrevented).toBe(true);
+  await draw(page); state = await palm();
+  expect(state.page).toBe(1); expect(state.selection).toBe('');
+  expect(await page.evaluate(() => window.fortshell.pageRevision)).toBe(revision);
+});
+
+test('database work stays off the input thread', async ({ page }) => {
+  await page.addInitScript(() => {
+    indexedDB.open = () => { throw new Error('Database access on the input thread'); };
+  });
+  await open(page); await draw(page); await page.evaluate(() => window.fortshell.flush());
+  await page.reload(); await page.waitForFunction(() => window.fortshell?.ready);
+  expect(await darkPixels(page)).toBeGreaterThan(100);
+});
+
+test('a pending save does not delay the next pen contact or resize the page', async ({ page }) => {
+  await open(page); await page.evaluate(() => window.fortshell.flush());
+  await page.evaluate(() => {
+    const db = window.fortshell.store.db, call = db.call.bind(db);
+    window.originalStoreCall = call;
+    db.call = (action, value) => action === 'write'
+      ? new Promise((resolve, reject) => { window.releaseSave = () => call(action, value).then(resolve, reject); })
+      : call(action, value);
+  });
+  await draw(page);
+  await page.evaluate(() => { window.saveInFlight = window.fortshell.flush(); });
+  const revision = await page.evaluate(() => window.fortshell.pageRevision);
+  const box = await page.locator('#active').boundingBox();
+  await page.mouse.move(box.x + box.width * 0.3, box.y + box.height * 0.6);
+  await page.mouse.down();
+  expect(await page.evaluate(() => window.fortshell.module._fs_size(2))).toBe(1);
+  expect(await page.evaluate(() => !!window.fortshell.store.running)).toBe(true);
+  await page.waitForTimeout(150);
+  expect(await page.evaluate(() => window.fortshell.pageRevision)).toBe(revision);
+  await page.evaluate(() => window.releaseSave());
+  await page.mouse.move(box.x + box.width * 0.6, box.y + box.height * 0.7, { steps: 12 });
+  expect(await page.evaluate(() => window.fortshell.module._fs_size(2))).toBeGreaterThan(10);
+  await page.mouse.up();
+  await page.evaluate(async () => {
+    window.fortshell.store.db.call = window.originalStoreCall;
+    await window.saveInFlight;
+    await window.fortshell.flush();
+  });
+});
+
 for (const scheduling of ['frame', 'immediate']) {
   test(`${scheduling} drawing submission and live latency recording`, async ({ page }) => {
     await open(page); await page.locator('#compare-toggle').click();
@@ -185,13 +271,13 @@ test('invalid import preserves ink and a failed save remains retryable', async (
   await expect(page.locator('#error')).toBeVisible();
   expect(await darkPixels(page)).toBeGreaterThan(100);
   const state = await page.evaluate(async () => {
-    const store = window.fortshell.store, db = store.db, transaction = db.transaction.bind(db);
-    db.transaction = () => { throw new DOMException('Test disk quota', 'QuotaExceededError'); };
+    const store = window.fortshell.store, db = store.db, call = db.call.bind(db);
+    db.call = () => Promise.reject(new DOMException('Test disk quota', 'QuotaExceededError'));
     store.put('meta', 'notebook', window.fortshell.snapshot().meta);
     let rejected = false;
     try { await store.flush(); } catch { rejected = true; }
     const retained = store.pending.size;
-    db.transaction = transaction; await store.flush();
+    db.call = call; await store.flush();
     return { rejected, retained, remaining: store.pending.size };
   });
   expect(state).toEqual({ rejected: true, retained: 1, remaining: 0 });

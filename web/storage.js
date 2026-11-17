@@ -1,14 +1,29 @@
-function request(req) {
-  return new Promise((resolve, reject) => {
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  });
-}
-function completion(tx) {
-  return new Promise((resolve, reject) => {
-    tx.oncomplete = resolve;
-    tx.onabort = tx.onerror = () => reject(tx.error || new Error('Local save aborted'));
-  });
+class StorageWorker {
+  constructor() {
+    this.worker = new Worker(new URL('./storage-worker.js', import.meta.url), { type: 'module' });
+    this.requests = new Map(); this.next = 0;
+    this.worker.onmessage = ({ data }) => {
+      const pending = this.requests.get(data.id);
+      if (!pending) return;
+      this.requests.delete(data.id);
+      if (data.error) pending.reject(Object.assign(new Error(data.error.message), { name: data.error.name }));
+      else pending.resolve(data.value);
+    };
+    this.worker.onerror = event => {
+      this.failure = new Error(event.message || 'Local storage worker failed');
+      for (const pending of this.requests.values()) pending.reject(this.failure);
+      this.requests.clear();
+    };
+  }
+  call(action, value) {
+    if (this.failure) return Promise.reject(this.failure);
+    return new Promise((resolve, reject) => {
+      const id = ++this.next;
+      this.requests.set(id, { resolve, reject });
+      try { this.worker.postMessage({ id, action, value }); }
+      catch (error) { this.requests.delete(id); reject(error); }
+    });
+  }
 }
 
 async function acquireWriter() {
@@ -30,11 +45,9 @@ export class NotebookStore {
   }
   static async open(status) {
     await acquireWriter();
-    const req = indexedDB.open('fortshell-notebook', 1);
-    req.onupgradeneeded = () => {
-      for (const name of ['meta', 'strokes', 'chunks', 'assets']) req.result.createObjectStore(name);
-    };
-    return new NotebookStore(await request(req), status);
+    const db = new StorageWorker();
+    await db.call('open');
+    return new NotebookStore(db, status);
   }
   put(store, key, value) {
     this.pending.set(`${store}:${JSON.stringify(key)}`, { store, key, value });
@@ -48,11 +61,7 @@ export class NotebookStore {
     const batch = this.pending; this.pending = new Map();
     this.running = (async () => {
       try {
-        const names = [...new Set([...batch.values()].map(x => x.store))];
-        const tx = this.db.transaction(names, 'readwrite');
-        const done = completion(tx);
-        for (const { store, key, value } of batch.values()) tx.objectStore(store).put(value, key);
-        await done;
+        await this.db.call('write', [...batch.values()]);
         this.writes += batch.size; this.transactions++;
         for (const x of batch.values()) this.bytes += x.value?.byteLength || 0;
         this.status(this.pending.size ? 'Saving...' : 'Saved locally');
@@ -65,25 +74,10 @@ export class NotebookStore {
     try { await this.running; } finally { this.running = null; }
   }
   async read() {
-    const tx = this.db.transaction(['meta', 'strokes', 'chunks', 'assets'], 'readonly');
-    const [meta, strokes, chunkKeys, chunks, pdf] = await Promise.all([
-      request(tx.objectStore('meta').get('notebook')),
-      request(tx.objectStore('strokes').getAll()),
-      request(tx.objectStore('chunks').getAllKeys()),
-      request(tx.objectStore('chunks').getAll()),
-      request(tx.objectStore('assets').get('pdf')),
-    ]);
-    return { meta, strokes, chunks: chunkKeys.map((key, i) => ({ key, data: chunks[i] })), pdf };
+    return this.db.call('read');
   }
   async replace(snapshot) {
     await this.flush();
-    const tx = this.db.transaction(['meta', 'strokes', 'chunks', 'assets'], 'readwrite');
-    const done = completion(tx);
-    for (const name of ['meta', 'strokes', 'chunks', 'assets']) tx.objectStore(name).clear();
-    tx.objectStore('meta').put(snapshot.meta, 'notebook');
-    for (const s of snapshot.strokes) tx.objectStore('strokes').put(s, s.id);
-    for (const c of snapshot.chunks) tx.objectStore('chunks').put(c.data, c.key);
-    if (snapshot.pdf) tx.objectStore('assets').put(snapshot.pdf, 'pdf');
-    await done; this.status('Saved locally');
+    await this.db.call('replace', snapshot); this.status('Saved locally');
   }
 }

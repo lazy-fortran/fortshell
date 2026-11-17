@@ -1,6 +1,8 @@
 :root { font: 15px system-ui, sans-serif; color: #17212b; background: #e4e9eb; color-scheme: light; }
 * { box-sizing: border-box; }
-body { margin: 0; height: 100dvh; overflow: hidden; display: flex; flex-direction: column; }
+body { margin: 0; height: 100dvh; overflow: hidden; display: flex; flex-direction: column;
+  -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+input, textarea, [contenteditable] { -webkit-user-select: text; user-select: text; }
 header { flex: none; background: #f7f9fa; padding: max(8px, env(safe-area-inset-top)) 12px 8px;
   border-bottom: 1px solid #ccd5da; z-index: 3; }
 [data-look=toolbar], .secondary { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
@@ -12,9 +14,9 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .secondary { margin-top: 7px; font-size: 13px; }
 #title { font: inherit; font-weight: 600; border: none; background: transparent; min-width: 80px;
   max-width: 260px; flex: 1; padding: 5px; }
-#save-status { flex: 1; color: #48616d; min-width: 120px; }
+#save-status { flex: 0 0 120px; color: #48616d; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #workspace { overflow: auto; flex: 1; min-height: 0; padding: 24px; overscroll-behavior: contain;
-  -webkit-overflow-scrolling: touch; outline: none; }
+  -webkit-overflow-scrolling: touch; outline: none; touch-action: none; }
 #paper { position: relative; background: white; box-shadow: 0 3px 20px #18303d26;
   margin: 0 auto; flex: none; isolation: isolate; }
 #paper canvas { position: absolute; inset: 0; width: 100%; height: 100%; }

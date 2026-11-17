@@ -22,7 +22,7 @@ module fortshell_document
     integer, save :: stroke_count = 0, current_page = 1, page_count = 1
     integer, save :: history_head = 0, history_count = 0, active = 0
     integer(c_int), save :: tool = 0
-    real(c_float), save :: pen_width = 0.65
+    real(c_float), save :: pen_width = 1.5
     type(ink_state_t), save :: ink
 contains
     subroutine fs_reset() bind(C)
@@ -151,6 +151,8 @@ contains
             else
                 if (.not. all(ieee_is_finite(output_buffer(:,1:n)))) return
             end if
+            ! Light pen contact must remain visible instead of becoming a hairline.
+            output_buffer(3,1:n) = max(output_buffer(3,1:n),s%width*0.35)
             s%raw(:,s%n+1:total) = input_buffer(:,1:n)
             s%modeled(:,s%n+1:total) = output_buffer(:,1:n)
             s%n = total

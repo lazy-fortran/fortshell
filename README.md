@@ -7,8 +7,11 @@ A browser ink notebook with a Fortran document model and
 
 Write on an A4 landscape page, advance past the final page to create another,
 annotate a PDF, or export a vector PDF and an editable `.fortshell` notebook.
-Undo, redo, stroke erasing, pressure, zoom, touch navigation, and immediate
-keyboard command entry are available. Fingers navigate. Pens and mice write.
+Undo, redo, stroke erasing, pressure, zoom, and immediate keyboard command
+entry are available. Pens and mice write. Touches on the page are ignored
+to prevent palm gestures. Use the page and zoom controls for navigation.
+The default pen is 1.5 mm, with a minimum rendered width of 70 percent to
+keep light contact visible. Raw pressure is retained in the notebook.
 
 The longer-term application is a unified AI-native shell for terminals,
 browsers, tablets, desktops, and phones. This first slice has no AI service or
@@ -112,7 +115,8 @@ storage until the user downloads them.
 
 ## Saving
 
-The browser keeps the current notebook in IndexedDB. Pending changes coalesce
+The browser keeps the current notebook in IndexedDB through a dedicated worker.
+Database operations run outside the drawing thread. Pending changes coalesce
 for 750 ms. Stroke checkpoints write only new sample tails. Idle tabs perform
 no periodic writes. Long strokes checkpoint during input. Save failures retain
 pending data and show a retry message. Original PDF bytes are stored once.

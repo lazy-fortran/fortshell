@@ -19,6 +19,7 @@ let renderGeneration = 0, changing = Promise.resolve(), imports = Promise.resolv
 const saved = new Map();
 let operation = null, results;
 let scheduling = 'immediate', profiler = null, latencyEvents, latencyResults;
+let controlsDirty = false;
 
 function pageSize(page = M._fs_current()) {
   return [M._fs_dimensions(page, 1), M._fs_dimensions(page, 2)];
@@ -49,7 +50,7 @@ function checkpoint(id, complete = false) {
   store.put('strokes', id, strokeMeta(id, complete));
   metaChanged();
 }
-function refreshControls() { M._fortui_web_step(); }
+function refreshControls() { M._fortui_web_step(); controlsDirty = false; }
 function download(bytes, name, type) {
   const url = URL.createObjectURL(new Blob([bytes], { type })), a = document.createElement('a');
   a.href = url; a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(url), 30000);
@@ -89,7 +90,7 @@ async function renderPage() {
   if (pdf && page <= pdfPages) await renderPDF(pdf, page, $('background'), $('active').width);
   if (generation !== renderGeneration) return;
   surface = new PointerSurface($('active'), { start: startStroke, samples: appendSamples,
-    end: endStroke, gesture });
+    end: endStroke });
   $('active').addEventListener('contextmenu', e => e.preventDefault());
   pageRevision++;
 }
@@ -111,10 +112,11 @@ function coordinates(s) {
 function startStroke(e) {
   if (!ready || operation || current) return false;
   const page = M._fs_current();
-  refreshControls();
+  if (controlsDirty) refreshControls();
   if (operation || M._fs_current() !== page) return false;
   $('error').hidden = true;
-  $('workspace').focus({ preventScroll: true });
+  if (document.activeElement?.matches('input,textarea,[contenteditable]')) document.activeElement.blur();
+  getSelection()?.removeAllRanges();
   $('prompt').hidden = true;
   if (M._fs_tool(-1) === 1 || e.button === 5) { current = -1; return true; }
   current = M._fs_begin(M._fs_width(0), 0, engine === 'wasm' ? 0 : engine === 'js' ? 1 : engine === 'perfect' ? 3 : 2);
@@ -218,37 +220,6 @@ function redrawCommitted() {
   committed.clear();
   for (let id = 1; id <= M._fs_count(); id++) if (M._fs_visible(id)
       && M._fs_stroke_page(id) === M._fs_current()) drawStroke(committed, id);
-}
-
-let touchStart;
-function gesture(touches, phase) {
-  const entries = [...touches.values()];
-  if (phase === 'start') touchStart = { points: entries.map(p => [...p]), zoom,
-    scroll: [$('workspace').scrollLeft, $('workspace').scrollTop] };
-  if (phase === 'move' && entries.length === 1 && touchStart?.points.length === 1) {
-    touchStart.last = entries[0];
-    if (zoom > 1) {
-      $('workspace').scrollLeft = touchStart.scroll[0] + touchStart.points[0][0] - entries[0][0];
-      $('workspace').scrollTop = touchStart.scroll[1] + touchStart.points[0][1] - entries[0][1];
-    }
-  }
-  if (phase === 'move' && entries.length === 2 && touchStart?.points.length === 2) {
-    const distance = a => Math.hypot(a[0][0] - a[1][0], a[0][1] - a[1][1]);
-    const scale = Math.max(0.5, Math.min(4, touchStart.zoom * distance(entries) / Math.max(1, distance(touchStart.points))));
-    $('paper').style.transform = `scale(${scale / zoom})`; $('paper').style.transformOrigin = 'top left';
-    touchStart.nextZoom = scale;
-  }
-  if (phase === 'end' && !entries.length) {
-    if (touchStart?.nextZoom) { zoom = touchStart.nextZoom; $('paper').style.transform = ''; void requestPage(); }
-    else if (zoom <= 1 && touchStart?.last && touchStart.points.length === 1) {
-      const dx = touchStart.last[0] - touchStart.points[0][0], dy = touchStart.last[1] - touchStart.points[0][1];
-      if (Math.abs(dx) > 80 && Math.abs(dx) > Math.abs(dy) * 1.5) {
-        if (dx < 0) M._fs_next(); else M._fs_previous();
-        refreshControls(); metaChanged(); void requestPage();
-      }
-    }
-    touchStart = null;
-  }
 }
 
 function snapshot() {
@@ -363,12 +334,26 @@ globalThis.fortshellHost = (action, id) => {
 async function boot() {
   while (!globalThis.Module?._fs_count || !$('controls').querySelector('[data-id="next"]')) await wait(10);
   M = globalThis.Module;
-  store = await NotebookStore.open(message => { $('save-status').textContent = message; });
+  store = await NotebookStore.open(message => {
+    if ($('save-status').textContent !== message) $('save-status').textContent = message;
+    $('save-status').title = message;
+  });
   const s = await store.read();
   if (s.meta) await restore(s); else await requestPage();
   ready = true;
   $('save-status').textContent = 'Saved locally';
   if (!s.meta) metaChanged();
+  for (const type of ['click', 'input', 'change']) {
+    $('controls').addEventListener(type, () => { controlsDirty = true; }, true);
+  }
+  for (const type of ['pointerdown', 'pointermove', 'pointerrawupdate', 'pointerup']) {
+    $('workspace').addEventListener(type, event => {
+      if (event.pointerType === 'touch') { event.preventDefault(); event.stopImmediatePropagation(); }
+    }, { capture: true, passive: false });
+  }
+  for (const type of ['touchstart', 'touchmove', 'selectstart', 'contextmenu', 'dragstart']) {
+    $('workspace').addEventListener(type, event => event.preventDefault(), { passive: false });
+  }
   $('controls').addEventListener('click', e => {
     if (e.target.closest('[data-id="import"]')) {
       // The file chooser starts inside the original trusted click.

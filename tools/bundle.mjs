@@ -14,7 +14,7 @@ await build({ entryPoints: [resolve(root, 'web/shell.js')], bundle: true, format
   sourcemap: true, minify: true,
   alias: { 'fortink/model': resolve(ink, 'web/model.js'), 'fortui/surface': resolve(ui, 'web/fortui_surface.js') },
   target: ['safari18.2', 'chrome120', 'firefox130'] });
-for (const file of ['index.html', 'shell.css', 'manifest.webmanifest']) await copyFile(resolve(root, 'web', file), resolve(out, file));
+for (const file of ['index.html', 'shell.css', 'manifest.webmanifest', 'storage-worker.js']) await copyFile(resolve(root, 'web', file), resolve(out, file));
 await copyFile(resolve(root, 'node_modules/pdfjs-dist/build/pdf.worker.min.mjs'), resolve(out, 'pdf.worker.min.mjs'));
 const pdfAssets = ['cmaps', 'standard_fonts', 'wasm'];
 for (const directory of pdfAssets) {
@@ -31,6 +31,8 @@ for (const [name, file] of [['pdfjs-dist', 'LICENSE'], ['pdf-lib', 'LICENSE.md']
 }
 const { readFile } = await import('node:fs/promises');
 const hash = createHash('sha256');
+// Cached responses retain headers, including the module content type.
+hash.update(await readFile(resolve(root, 'deploy/nginx.conf')));
 for (const file of files.sort()) hash.update(await readFile(resolve(out, file)));
 const version = hash.digest('hex').slice(0, 16);
 await writeFile(resolve(out, 'sw.js'), `const CACHE='fortshell-${version}';
