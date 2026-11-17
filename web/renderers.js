@@ -14,19 +14,21 @@ function union(a, b) {
 function intersects(a, b) { return a[0] <= b[2] && a[2] >= b[0] && a[1] <= b[3] && a[3] >= b[1]; }
 
 function prepare(renderer, points, first, width, live, predicted) {
-  const shape = live ? (renderer.shape ||= new InkShape()) : new InkShape();
+  // Bound Canvas tip work without fragmenting mesh uploads.
+  const chunkSize = live && renderer.ctx ? INK_CHUNK : 64;
+  const shape = live ? (renderer.shape ||= new InkShape(chunkSize)) : new InkShape(chunkSize);
   const oldChunks = shape.chunks;
   const from = shape.update(points, first, width, predicted), scale = renderer.canvas.width / renderer.width;
   let bounds = [Infinity, Infinity, -Infinity, -Infinity];
   for (let i = from; i < oldChunks.length; i++) bounds = union(bounds, oldChunks[i].bounds);
-  for (let i = from; i * INK_CHUNK < shape.points.length; i++) {
-    const start = i * INK_CHUNK, end = Math.min(start + INK_CHUNK, shape.points.length);
+  for (let i = from; i * chunkSize < shape.points.length; i++) {
+    const start = i * chunkSize, end = Math.min(start + chunkSize, shape.points.length);
     const chunk = { bounds: shape.bounds(start, end) };
     if (renderer.ctx) { chunk.path = new Path2D(); shape.path(chunk.path, start, end); }
     else chunk.mesh = shape.mesh(start, end, scale);
     shape.chunks[i] = chunk; bounds = union(bounds, chunk.bounds);
   }
-  shape.chunks.length = Math.ceil(shape.points.length / INK_CHUNK);
+  shape.chunks.length = Math.ceil(shape.points.length / chunkSize);
   const x = Math.max(0, Math.floor(bounds[0] * scale) - 2), y = Math.max(0, Math.floor(bounds[1] * scale) - 2);
   const right = Math.min(renderer.canvas.width, Math.ceil(bounds[2] * scale) + 2);
   const bottom = Math.min(renderer.canvas.height, Math.ceil(bounds[3] * scale) + 2);
@@ -67,7 +69,7 @@ class CanvasRenderer {
   commit(target, points, width, drawn) {
     const tip = this.shape?.points.at(-1), at = points.length - 3;
     if (this.shape?.predicted || drawn !== points.length / 3 || !tip || tip[0] !== points[at] || tip[1] !== points[at + 1])
-      this.draw(points, 0, width, true);
+      this.draw(points, this.shape ? Math.min(drawn, points.length / 3 - 1) : 0, width, true);
     // Preserve the live coverage at lift-off instead of rasterizing it a second time.
     target.ctx.setTransform(1, 0, 0, 1, 0, 0);
     target.ctx.drawImage(this.canvas, 0, 0);

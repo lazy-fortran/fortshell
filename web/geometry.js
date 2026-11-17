@@ -1,11 +1,13 @@
 const TAU = 2 * Math.PI;
 export const INK = '#17212b';
-export const INK_CHUNK = 64;
+export const INK_CHUNK = 8;
 const mix = (a, b) => [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
 
 // Distance, rather than time spent pressing, controls brush width transitions.
 export class InkShape {
-  constructor() { this.points = []; this.distance = []; this.ends = []; this.chunks = []; }
+  constructor(chunkSize = INK_CHUNK) {
+    this.chunkSize = chunkSize; this.points = []; this.distance = []; this.ends = []; this.chunks = [];
+  }
   update(input, first = 0, width = input[2] * 2, predicted = []) {
     const oldLength = this.distance.at(-1) || 0;
     if (!first) { this.points = []; this.distance = []; this.ends = []; this.chunks = []; }
@@ -41,7 +43,7 @@ export class InkShape {
     for (let i = first * 3; i < input.length; i += 3) append(input[i], input[i + 1], input[i + 2]);
     for (const p of predicted) append(...p);
     this.predicted = predicted.length;
-    return Math.floor(changed / INK_CHUNK);
+    return Math.floor(changed / this.chunkSize);
   }
   radius(i) {
     const total = this.distance.at(-1), d = Math.min(this.distance[i], total - this.distance[i]);

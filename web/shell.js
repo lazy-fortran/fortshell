@@ -439,9 +439,14 @@ async function boot() {
   $('zoom-out').onclick = () => setZoom(zoom / 1.25);
   $('zoom-reset').onclick = () => setZoom(1);
   let resizeTimer;
+  const workspace = $('workspace');
+  let workspaceWidth = workspace.clientWidth, workspaceHeight = workspace.clientHeight;
   new ResizeObserver(() => {
+    const width = workspace.clientWidth, height = workspace.clientHeight;
+    if (width === workspaceWidth && height === workspaceHeight) return;
+    workspaceWidth = width; workspaceHeight = height;
     clearTimeout(resizeTimer); resizeTimer = setTimeout(() => { if (!current) void requestPage(); }, 100);
-  }).observe($('workspace'));
+  }).observe(workspace);
   $('workspace').addEventListener('wheel', e => {
     if (e.ctrlKey || e.metaKey) { e.preventDefault(); setZoom(zoom * Math.exp(-e.deltaY * 0.005)); }
   }, { passive: false });

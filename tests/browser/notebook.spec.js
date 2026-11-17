@@ -145,6 +145,30 @@ test('database work stays off the input thread', async ({ page }) => {
   expect(await darkPixels(page)).toBeGreaterThan(100);
 });
 
+test('unchanged workspace observation preserves the canvas and a real resize updates it', async ({ page }) => {
+  await page.addInitScript(() => {
+    const Observer = ResizeObserver;
+    window.ResizeObserver = class extends Observer {
+      constructor(callback) {
+        super((entries, observer) => {
+          callback(entries, observer);
+          window.observeWorkspaceAgain = () => callback(entries, observer);
+        });
+      }
+    };
+  });
+  await open(page);
+  await page.waitForFunction(() => !!window.observeWorkspaceAgain);
+  const revision = await page.evaluate(() => {
+    window.observeWorkspaceAgain(); return window.fortshell.pageRevision;
+  });
+  await page.waitForTimeout(150);
+  expect(await page.evaluate(() => window.fortshell.pageRevision)).toBe(revision);
+  const size = page.viewportSize();
+  await page.setViewportSize({ width: size.width + 100, height: size.height + 100 });
+  await expect.poll(() => page.evaluate(() => window.fortshell.pageRevision)).toBeGreaterThan(revision);
+});
+
 test('a pending save does not delay the next pen contact or resize the page', async ({ page }) => {
   await open(page); await page.evaluate(() => window.fortshell.flush());
   await page.evaluate(() => {
@@ -469,6 +493,40 @@ test('live curved ink keeps identical edge coverage at lift-off', async ({ page 
   });
   expect(result.fractional).toBeGreaterThan(100);
   expect(result.differences).toBe(0);
+});
+
+test('finishing a long predicted stroke repaints only its tip', async ({ page }) => {
+  await open(page);
+  const result = await page.evaluate(() => {
+    const canvas = document.getElementById('active'), box = canvas.getBoundingClientRect();
+    canvas.setPointerCapture = () => {}; canvas.hasPointerCapture = () => false;
+    let curves = 0;
+    const curve = Path2D.prototype.quadraticCurveTo;
+    Path2D.prototype.quadraticCurveTo = function (...args) { curves++; return curve.apply(this, args); };
+    const send = (type, i) => {
+      const x = 20 + i * 0.18, y = 105 + 20 * Math.sin(i / 80);
+      const e = new PointerEvent(type, { bubbles: true, cancelable: true, pointerType: 'pen',
+        pointerId: 99, button: 0, buttons: type === 'pointerup' ? 0 : 1,
+        clientX: box.left + x / 297 * box.width, clientY: box.top + y / 210 * box.height, pressure: 0.5 });
+      Object.defineProperty(e, 'timeStamp', { value: 1000 + i * 4 });
+      Object.defineProperty(e, 'getPredictedEvents', { value: () => [8, 16].map(dt => ({
+        clientX: box.left + (x + dt) / 297 * box.width,
+        clientY: box.top + y / 210 * box.height, timeStamp: 1000 + i * 4 + dt, pressure: 0.5 })) });
+      canvas.dispatchEvent(e);
+    };
+    try {
+      send('pointerdown', 0);
+      const move = 'onpointerrawupdate' in canvas ? 'pointerrawupdate' : 'pointermove';
+      for (let i = 1; i <= 1200; i++) send(move, i);
+      curves = 0;
+      // Clearing during input finishes the stroke while its forecast is still visible.
+      document.getElementById('clear-page').click();
+      return { curves, samples: window.fortshell.module._fs_size(1),
+        visible: window.fortshell.snapshot().strokes.some(s => s.visible) };
+    } finally { Path2D.prototype.quadraticCurveTo = curve; }
+  });
+  expect(result.samples).toBe(1201); expect(result.visible).toBe(false);
+  expect(result.curves).toBeLessThan(512);
 });
 
 test('sparse vector PDF ink keeps its body width and tapered caps', async ({ page }) => {
