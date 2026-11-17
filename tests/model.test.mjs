@@ -56,3 +56,14 @@ test('sparse straight strokes keep full body width between tapered caps', () => 
   assert.equal(shape.radius(middle), 0.75);
   assert.equal(shape.points.at(-1)[0], 30);
 });
+
+test('replacing a forecast restores measured geometry across chunk boundaries', () => {
+  const input = new Float32Array(130 * 3);
+  for (let i = 0; i < 130; i++) input.set([i, Math.sin(i / 10), 0.5], i * 3);
+  const shape = new InkShape();
+  shape.update(input.subarray(0, 100 * 3), 0, 1.5, [[110, 20, 0.5], [120, 30, 0.5]]);
+  shape.update(input, 100, 1.5);
+  const measured = new InkShape(); measured.update(input, 0, 1.5);
+  assert.deepEqual(shape.mesh(), measured.mesh());
+  assert.equal(shape.ends.length, 130); assert.equal(shape.predicted, 0);
+});

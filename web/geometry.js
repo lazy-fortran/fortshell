@@ -5,22 +5,27 @@ const mix = (a, b) => [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
 
 // Distance, rather than time spent pressing, controls brush width transitions.
 export class InkShape {
-  constructor() { this.points = []; this.distance = []; this.chunks = []; }
-  update(input, first = 0, width = input[2] * 2) {
-    if (!first) { this.points = []; this.distance = []; this.chunks = []; }
-    this.width = width;
+  constructor() { this.points = []; this.distance = []; this.ends = []; this.chunks = []; }
+  update(input, first = 0, width = input[2] * 2, predicted = []) {
     const oldLength = this.distance.at(-1) || 0;
+    if (!first) { this.points = []; this.distance = []; this.ends = []; this.chunks = []; }
+    else if (first < this.ends.length) {
+      this.points.length = this.ends[first - 1]; this.distance.length = this.points.length;
+      this.ends.length = first;
+    }
+    this.width = width;
+    const length = this.distance.at(-1) || 0;
     let changed = this.points.length - 1;
-    while (changed > 0 && this.distance[changed] > oldLength - width) changed--;
+    while (changed > 0 && this.distance[changed] > length - width) changed--;
     changed = Math.max(0, changed - 2);
-    if (oldLength < width * 2) changed = 0;
-    for (let i = first * 3; i < input.length; i += 3) {
-      const previous = this.points.at(-1), x = input[i], y = input[i + 1];
+    if (Math.min(oldLength, length) < width * 2) changed = 0;
+    const append = (x, y, radius) => {
+      const previous = this.points.at(-1);
       const d = previous ? Math.hypot(x - previous[0], y - previous[1]) : 0;
       // A stationary pen leaves one deposit, including its fractional edge coverage.
-      if (previous && d < 1e-7) continue;
+      if (previous && d < 1e-7) { this.ends.push(this.points.length); return; }
       const r = previous ? Math.max(previous[2] - d * 0.25,
-        Math.min(previous[2] + d * 0.25, input[i + 2])) : input[i + 2];
+        Math.min(previous[2] + d * 0.25, radius)) : radius;
       const start = this.distance.at(-1) || 0;
       // Sparse events and simplified PDFs still need stations inside the tapers.
       const steps = Math.max(1, Math.ceil(d / Math.max(0.05, width / 2)));
@@ -31,7 +36,11 @@ export class InkShape {
           previous[2] + u * (r - previous[2])]);
         this.distance.push(start + u * d);
       }
-    }
+      this.ends.push(this.points.length);
+    };
+    for (let i = first * 3; i < input.length; i += 3) append(input[i], input[i + 1], input[i + 2]);
+    for (const p of predicted) append(...p);
+    this.predicted = predicted.length;
     return Math.floor(changed / INK_CHUNK);
   }
   radius(i) {

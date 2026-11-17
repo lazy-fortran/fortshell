@@ -37,11 +37,16 @@ for (const file of files.sort()) hash.update(await readFile(resolve(out, file)))
 const version = hash.digest('hex').slice(0, 16);
 await writeFile(resolve(out, 'sw.js'), `const CACHE='fortshell-${version}';
 const files=${JSON.stringify(files.map(x => './' + x))};
-self.addEventListener('install',e=>e.waitUntil(caches.open(CACHE).then(c=>c.addAll(files))));
-self.addEventListener('activate',e=>e.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(k=>k.startsWith('fortshell-')&&k!==CACHE).map(k=>caches.delete(k))))));
+self.addEventListener('install',e=>e.waitUntil(caches.open(CACHE).then(c=>c.addAll(files)).then(()=>self.skipWaiting())));
+self.addEventListener('activate',e=>e.waitUntil((async()=>{
+  const previous=(await caches.keys()).filter(k=>k.startsWith('fortshell-')&&k!==CACHE);
+  await Promise.all(previous.slice(0,-1).map(k=>caches.delete(k)));
+  await self.clients.claim();
+})()));
 self.addEventListener('fetch',e=>{if(e.request.method==='GET'&&new URL(e.request.url).origin===location.origin)e.respondWith((async()=>{
   const c=await caches.open(CACHE), hit=await c.match(e.request);if(hit)return hit;
   if(e.request.mode==='navigate'){const home=await c.match(new URL('./index.html',self.registration.scope));if(home)return home;}
+  const previous=await caches.match(e.request);if(previous)return previous;
   const response=await fetch(e.request);if(response.ok)await c.put(e.request,response.clone()).catch(()=>{});return response;
 })());});
 `);

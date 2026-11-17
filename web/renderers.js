@@ -13,18 +13,20 @@ function union(a, b) {
 }
 function intersects(a, b) { return a[0] <= b[2] && a[2] >= b[0] && a[1] <= b[3] && a[3] >= b[1]; }
 
-function prepare(renderer, points, first, width, live) {
+function prepare(renderer, points, first, width, live, predicted) {
   const shape = live ? (renderer.shape ||= new InkShape()) : new InkShape();
-  const from = shape.update(points, first, width), scale = renderer.canvas.width / renderer.width;
+  const oldChunks = shape.chunks;
+  const from = shape.update(points, first, width, predicted), scale = renderer.canvas.width / renderer.width;
   let bounds = [Infinity, Infinity, -Infinity, -Infinity];
+  for (let i = from; i < oldChunks.length; i++) bounds = union(bounds, oldChunks[i].bounds);
   for (let i = from; i * INK_CHUNK < shape.points.length; i++) {
-    const previous = shape.chunks[i], start = i * INK_CHUNK, end = Math.min(start + INK_CHUNK, shape.points.length);
-    if (previous) bounds = union(bounds, previous.bounds);
+    const start = i * INK_CHUNK, end = Math.min(start + INK_CHUNK, shape.points.length);
     const chunk = { bounds: shape.bounds(start, end) };
     if (renderer.ctx) { chunk.path = new Path2D(); shape.path(chunk.path, start, end); }
     else chunk.mesh = shape.mesh(start, end, scale);
     shape.chunks[i] = chunk; bounds = union(bounds, chunk.bounds);
   }
+  shape.chunks.length = Math.ceil(shape.points.length / INK_CHUNK);
   const x = Math.max(0, Math.floor(bounds[0] * scale) - 2), y = Math.max(0, Math.floor(bounds[1] * scale) - 2);
   const right = Math.min(renderer.canvas.width, Math.ceil(bounds[2] * scale) + 2);
   const bottom = Math.min(renderer.canvas.height, Math.ceil(bounds[3] * scale) + 2);
@@ -50,9 +52,9 @@ class CanvasRenderer {
     const c = this.ctx;
     c.setTransform(1, 0, 0, 1, 0, 0); c.clearRect(0, 0, this.canvas.width, this.canvas.height);
   }
-  draw(points, first = 0, width, live = false) {
+  draw(points, first = 0, width, live = false, predicted = []) {
     if (!points.length) return;
-    const c = this.ctx, { chunks, clip } = prepare(this, points, first, width, live);
+    const c = this.ctx, { chunks, clip } = prepare(this, points, first, width, live, predicted);
     if (!clip[2] || !clip[3]) return;
     c.save(); c.setTransform(1, 0, 0, 1, 0, 0);
     c.beginPath(); c.rect(...clip); c.clip();
@@ -64,7 +66,7 @@ class CanvasRenderer {
   }
   commit(target, points, width, drawn) {
     const tip = this.shape?.points.at(-1), at = points.length - 3;
-    if (drawn !== points.length / 3 || !tip || tip[0] !== points[at] || tip[1] !== points[at + 1])
+    if (this.shape?.predicted || drawn !== points.length / 3 || !tip || tip[0] !== points[at] || tip[1] !== points[at + 1])
       this.draw(points, 0, width, true);
     // Preserve the live coverage at lift-off instead of rasterizing it a second time.
     target.ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -108,9 +110,9 @@ class GLRenderer {
     gl.viewport(0, 0, canvas.width, canvas.height); this.clear();
   }
   clear() { this.shape = null; this.gl.disable(this.gl.SCISSOR_TEST); this.gl.clearColor(0, 0, 0, 0); this.gl.clear(this.gl.COLOR_BUFFER_BIT); }
-  draw(points, first = 0, width, live = false) {
+  draw(points, first = 0, width, live = false, predicted = []) {
     if (!points.length) return;
-    const { chunks, clip } = prepare(this, points, first, width, live);
+    const { chunks, clip } = prepare(this, points, first, width, live, predicted);
     const gl = this.gl, data = vertices(chunks);
     if (!data.length || !clip[2] || !clip[3]) return;
     gl.enable(gl.SCISSOR_TEST); gl.scissor(clip[0], this.canvas.height - clip[1] - clip[3], clip[2], clip[3]);
@@ -201,9 +203,9 @@ class GPUrenderer {
     const encoder = this.device.createCommandEncoder(), pass = this.pass(encoder, true);
     pass.end(); this.present(encoder);
   }
-  draw(points, first = 0, width, live = false) {
+  draw(points, first = 0, width, live = false, predicted = []) {
     if (!points.length) return;
-    const { chunks, clip } = prepare(this, points, first, width, live), data = vertices(chunks);
+    const { chunks, clip } = prepare(this, points, first, width, live, predicted), data = vertices(chunks);
     if (!clip[2] || !clip[3]) return;
     if (!data.length) return;
     const d = this.device;

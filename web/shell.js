@@ -8,6 +8,7 @@ import { runBenchmark } from './benchmark.js';
 import { perfectOutline } from './perfect.js';
 import { validateSnapshot } from './notebook.js';
 import { InkLatency } from './latency.js';
+import { installUpdates } from './updates.js';
 
 const $ = id => document.getElementById(id);
 const error = e => { $('error').textContent = e.message || String(e); $('error').hidden = false; console.error(e); };
@@ -77,9 +78,7 @@ async function renderPage() {
     canvas.height = Math.max(1, Math.ceil(cssHeight * dpr));
     if (old !== canvas) old.replaceWith(canvas);
   }
-  for (const id of ['background', 'prediction']) {
-    $(id).width = $('active').width; $(id).height = $('active').height;
-  }
+  $('background').width = $('active').width; $('background').height = $('active').height;
   const nextCommitted = await createRenderer($('committed'), renderer, width, height);
   const nextActive = await createRenderer($('active'), renderer, width, height);
   if (generation !== renderGeneration) { nextCommitted.dispose(); nextActive.dispose(); return; }
@@ -124,7 +123,7 @@ function startStroke(e) {
   model.reset(); drawn = 0; predictions = [];
   return true;
 }
-let checkpointTimer = null;
+let checkpointTimer = null, predictionTimer = null;
 function appendSamples(samples, predicted) {
   if (current === -1) {
     for (const sample of samples) {
@@ -163,6 +162,13 @@ function appendSamples(samples, predicted) {
     }
   }
   predictions = predicted.map(coordinates);
+  clearTimeout(predictionTimer);
+  if (predictions.length) predictionTimer = setTimeout(() => {
+    predictionTimer = null; predictions = [];
+    if (current <= 0) return;
+    if (scheduling === 'immediate') drawActive();
+    else if (!frame) frame = requestAnimationFrame(drawActive);
+  }, 16);
   if (!checkpointTimer) checkpointTimer = setTimeout(() => {
     checkpointTimer = null; checkpoint(current);
   }, 750);
@@ -170,9 +176,14 @@ function appendSamples(samples, predicted) {
   if (scheduling === 'immediate') drawActive();
   else if (!frame) frame = requestAnimationFrame(drawActive);
 }
-function drawPerfect(target, id) {
+function drawPerfect(target, id, preview = []) {
   // Reference pipeline uses its own outline. It is not a language benchmark.
-  const outline = perfectOutline(raw(id), M._fs_meta(id, 0));
+  let input = raw(id);
+  if (preview.length) {
+    const combined = new Float32Array(input.length + preview.length * 4); combined.set(input);
+    preview.forEach((p, i) => combined.set(p, input.length + i * 4)); input = combined;
+  }
+  const outline = perfectOutline(input, M._fs_meta(id, 0));
   const c = target.ctx;
   if (!c) throw new Error('The reference outline requires Canvas 2D');
   c.setTransform(target.canvas.width / target.width, 0, 0, target.canvas.height / target.height, 0, 0);
@@ -187,26 +198,23 @@ function drawActive() {
   frame = 0;
   if (current <= 0) return;
   const started = profiler && performance.now();
-  if (engine === 'perfect') activeRenderer.clear();
-  drawStroke(activeRenderer, current, drawn, true);
-  drawn = M._fs_size(current);
-  const c = $('prediction').getContext('2d');
-  c.clearRect(0, 0, $('prediction').width, $('prediction').height);
-  if (predictions.length && drawn) {
-    const p = points(current), at = p.length - 3, [w, h] = pageSize();
-    c.save(); c.scale($('prediction').width / w, $('prediction').height / h);
-    c.beginPath(); c.moveTo(p[at], p[at + 1]);
-    const latestTime = raw(current).at(-2);
-    for (const [x, y, t] of predictions) if (t > latestTime && t - latestTime <= 0.016) c.lineTo(x, y);
-    c.lineWidth = p[at + 2] * 2; c.lineCap = 'round'; c.lineJoin = 'round';
-    c.strokeStyle = INK; c.stroke(); c.restore();
+  const p = points(current), latestTime = raw(current).at(-2), preview = [];
+  let lastTime = latestTime;
+  for (const prediction of predictions) {
+    const [x, y, t] = prediction;
+    if (t > lastTime && t - latestTime <= 0.016) { preview.push(prediction); lastTime = t; }
   }
+  if (engine === 'perfect') { activeRenderer.clear(); drawPerfect(activeRenderer, current, preview); }
+  else activeRenderer.draw(p, drawn, M._fs_meta(current, 0), true,
+    preview.map(([x, y]) => [x, y, p.at(-1)]));
+  drawn = M._fs_size(current);
   if (profiler) profiler.submitted(started);
 }
 function endStroke(cancelled) {
   if (!current) return;
   cancelAnimationFrame(frame); frame = 0;
   clearTimeout(checkpointTimer); checkpointTimer = null;
+  clearTimeout(predictionTimer); predictionTimer = null; predictions = [];
   if (current === -1) { current = 0; redrawCommitted(); refreshControls(); return; }
   const started = profiler && performance.now();
   const id = M._fs_finish(cancelled ? 1 : 0); current = 0;
@@ -216,7 +224,6 @@ function endStroke(cancelled) {
     else drawStroke(committed, id);
   }
   activeRenderer.clear();
-  $('prediction').getContext('2d').clearRect(0, 0, $('prediction').width, $('prediction').height);
   if (profiler) profiler.submitted(started);
   checkpoint(id, true); refreshControls();
 }
@@ -486,6 +493,12 @@ async function boot() {
     get busy() { return !!operation || !surface; },
     latencyReport: () => profiler?.report() || latencyResults,
     get engine() { return engine; }, get renderer() { return renderer; } };
-  if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(error);
+  void installUpdates($('update-app'), async () => {
+    if (operation) return false;
+    operation = 'update';
+    if (current) endStroke(false);
+    try { await store.flush(); return true; }
+    catch (e) { operation = null; throw e; }
+  }, error).catch(error);
 }
 boot().catch(error);

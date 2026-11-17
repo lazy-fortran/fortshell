@@ -60,7 +60,10 @@ an explicit skip when none is available.
 model. FortSym and FortGen generate its numerical leaf. Fortran owns strokes,
 pages, dimensions, and undo history. FortUI composes controls. Its direct
 pointer surface delivers coalesced samples without recomposing controls for
-each pen point. Browser predictions are displayed separately and never saved.
+each pen point. Browser predictions extend the same temporary outline and are never saved.
+They are replaced by measured samples and expire after 16 ms without new input.
+Clear page removes the current page's ink. Update app saves pending ink and
+loads an available application update without closing the notebook.
 
 JavaScript handles browser events, graphics APIs, storage, and the PDF
 libraries. PDF.js renders imported pages. pdf-lib preserves original PDF page

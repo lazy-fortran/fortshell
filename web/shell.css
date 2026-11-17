@@ -21,7 +21,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
   margin: 0 auto; flex: none; isolation: isolate; }
 #paper canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
 #active { touch-action: none; cursor: crosshair; }
-#prediction, #background, #committed { pointer-events: none; }
+#background, #committed { pointer-events: none; }
 #compare { padding: 10px 14px; border-top: 1px solid #c4cdd2; background: #f7f9fa; z-index: 4;
   max-height: 35dvh; overflow-y: auto; }
 #compare label { margin-right: 12px; white-space: nowrap; }

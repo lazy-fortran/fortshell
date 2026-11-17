@@ -510,3 +510,80 @@ test('clear page removes saved ink on this page and preserves other pages', asyn
   await page.locator('[data-id=previous]').click();
   await expect.poll(() => darkPixels(page)).toBeGreaterThan(100);
 });
+
+test('predicted ink shares the pen taper and disappears when measurements replace it', async ({ page }) => {
+  await open(page); await page.locator('#compare-toggle').click(); await page.locator('#engine').selectOption('raw');
+  const result = await page.evaluate(async () => {
+    const c = document.getElementById('active'), b = c.getBoundingClientRect();
+    c.setPointerCapture = () => {}; c.hasPointerCapture = () => false;
+    window.fortshell.module._fs_width(10);
+    const x = 140, y = 105, scale = b.width / 297;
+    const send = (type, i, mm, predicted = false) => {
+      const e = new PointerEvent(type, { bubbles: true, cancelable: true, pointerType: 'pen',
+        pointerId: 99, button: 0, buttons: type === 'pointerup' ? 0 : 1,
+        clientX: b.left + mm * scale, clientY: b.top + y / 210 * b.height, pressure: 0.5 });
+      Object.defineProperty(e, 'timeStamp', { value: 1000 + i * 4 });
+      if (predicted) Object.defineProperty(e, 'getPredictedEvents', { value: () => [8, 16].map((dt, j) => ({
+        clientX: b.left + (x + 3 * (j + 1)) * scale, clientY: b.top + y / 210 * b.height,
+        timeStamp: 1000 + i * 4 + dt, pressure: 0.5 })) });
+      c.dispatchEvent(e);
+    };
+    const pixels = () => {
+      const image = document.createElement('canvas'); image.width = c.width; image.height = c.height;
+      const ctx = image.getContext('2d'); ctx.drawImage(c, 0, 0);
+      const preview = document.getElementById('prediction'); if (preview) ctx.drawImage(preview, 0, 0);
+      return { ctx, image };
+    };
+    send('pointerdown', 0, 100);
+    const move = 'onpointerrawupdate' in c ? 'pointerrawupdate' : 'pointermove';
+    for (let i = 1; i <= 100; i++) send(move, i, 100 + i * 0.4, i === 100);
+    const {ctx, image} = pixels(), widths = [135, 146].map(mm => {
+      const data = ctx.getImageData(Math.round(mm / 297 * image.width), 0, 1, image.height).data;
+      let coverage = 0; for (let i = 3; i < data.length; i += 4) coverage += data[i] / 255;
+      return coverage;
+    });
+    send(move, 101, x);
+    const replaced = pixels(), tail = replaced.ctx.getImageData(Math.ceil(144 / 297 * c.width), 0,
+      Math.floor(c.width * 0.1), c.height).data;
+    const remainingPrediction = tail.some((v, i) => i % 4 === 3 && v > 0);
+    send(move, 102, x, true);
+    await new Promise(resolve => setTimeout(resolve, 40));
+    const expired = pixels(), beyond = expired.ctx.getImageData(Math.ceil(144 / 297 * c.width), 0,
+      Math.floor(c.width * 0.1), c.height).data;
+    send('pointerup', 103, x);
+    return { widths, remainingPrediction, expiredPrediction: beyond.some((v, i) => i % 4 === 3 && v > 0),
+      maxSavedX: Math.max(...window.fortshell.snapshot().chunks[0].data.filter((_, i) => i % 4 === 0)) };
+  });
+  expect(result.widths[1]).toBeGreaterThan(0);
+  expect(result.widths[1]).toBeLessThan(result.widths[0] * 0.85);
+  expect(result.remainingPrediction).toBe(false); expect(result.expiredPrediction).toBe(false); expect(result.maxSavedX).toBeCloseTo(140, 4);
+});
+
+test('app update activates without closing the notebook and preserves unsaved ink', async ({ browser }) => {
+  const context = await browser.newContext({ serviceWorkers: 'allow' }), page = await context.newPage();
+  const server = createNotebookServer(), handler = server.listeners('request')[0];
+  let revision = 0;
+  server.removeAllListeners('request');
+  server.on('request', (req, res) => {
+    if (req.url.split('?')[0] === '/sw.js') {
+      void readFile(new URL('../../build/web/sw.js', import.meta.url), 'utf8').then(source => {
+        res.writeHead(200, { 'Content-Type': 'text/javascript', 'Cache-Control': 'no-store' });
+        res.end(source + `\n// update fixture ${revision}\n`);
+      });
+    } else handler(req, res);
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  try {
+    await page.goto(`http://127.0.0.1:${server.address().port}`);
+    await page.waitForFunction(() => window.fortshell?.ready && !!navigator.serviceWorker.controller);
+    await expect(page.locator('#update-app')).toBeVisible();
+    await draw(page);
+    const samples = await page.evaluate(() => window.fortshell.module._fs_size(1));
+    revision++;
+    await Promise.all([page.waitForEvent('load'), page.locator('#update-app').click()]);
+    await page.waitForFunction(() => window.fortshell?.ready);
+    expect(await page.evaluate(() => window.fortshell.module._fs_size(1))).toBe(samples);
+    expect(await darkPixels(page)).toBeGreaterThan(100);
+    await expect(page.locator('#error')).toBeHidden();
+  } finally { server.closeAllConnections(); server.close(); await context.close(); }
+});
