@@ -111,7 +111,7 @@ export async function runBenchmark(M, progress = () => {}) {
         const submissions = [], intervals = [];
         for (let i = 0; i < 20; i++) {
           await nextFrame();
-          const begin = performance.now(); renderer.clear(); renderer.draw(points);
+          const begin = performance.now(); renderer.clear(); renderer.draw(points, 0, 0.65);
           submissions.push(performance.now() - begin);
           await nextFrame(); intervals.push(performance.now() - begin);
         }
@@ -120,7 +120,7 @@ export async function runBenchmark(M, progress = () => {}) {
         for (let i = 0; i < 20; i++) {
           await nextFrame();
           const begin = performance.now();
-          renderer.draw(points.subarray(0, (i + 1) * 12), i * 4);
+          renderer.draw(points.subarray(0, (i + 1) * 12), i * 4, 0.65, true);
           incremental.push(performance.now() - begin);
         }
         report.rendering.push({ backend, processing, backing_pixels: [1200, 849],

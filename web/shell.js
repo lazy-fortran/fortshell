@@ -179,16 +179,16 @@ function drawPerfect(target, id) {
   c.beginPath(); outline.forEach((p, i) => i ? c.lineTo(...p) : c.moveTo(...p));
   c.closePath(); c.fillStyle = INK; c.fill();
 }
-function drawStroke(target, id, first = 0) {
+function drawStroke(target, id, first = 0, live = false) {
   if (M._fs_meta(id, 2) === 3) drawPerfect(target, id);
-  else target.draw(points(id), first);
+  else target.draw(points(id), first, M._fs_meta(id, 0), live);
 }
 function drawActive() {
   frame = 0;
   if (current <= 0) return;
   const started = profiler && performance.now();
   if (engine === 'perfect') activeRenderer.clear();
-  drawStroke(activeRenderer, current, drawn);
+  drawStroke(activeRenderer, current, drawn, true);
   drawn = M._fs_size(current);
   const c = $('prediction').getContext('2d');
   c.clearRect(0, 0, $('prediction').width, $('prediction').height);
@@ -210,9 +210,13 @@ function endStroke(cancelled) {
   if (current === -1) { current = 0; redrawCommitted(); refreshControls(); return; }
   const started = profiler && performance.now();
   const id = M._fs_finish(cancelled ? 1 : 0); current = 0;
+  if (M._fs_visible(id)) {
+    if (activeRenderer.commit && M._fs_meta(id, 2) !== 3)
+      activeRenderer.commit(committed, points(id), M._fs_meta(id, 0), drawn);
+    else drawStroke(committed, id);
+  }
   activeRenderer.clear();
   $('prediction').getContext('2d').clearRect(0, 0, $('prediction').width, $('prediction').height);
-  if (M._fs_visible(id)) drawStroke(committed, id);
   if (profiler) profiler.submitted(started);
   checkpoint(id, true); refreshControls();
 }

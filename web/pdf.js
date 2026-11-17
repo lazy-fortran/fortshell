@@ -1,4 +1,5 @@
 import { perfectOutline, outlinePath } from './perfect.js';
+import { InkShape } from './geometry.js';
 let pdfjs;
 const MM = 72 / 25.4;
 
@@ -44,24 +45,23 @@ export function simplify(points, tolerance = 0.025) {
   return new Float32Array(output);
 }
 
-export function svgInk(input) {
-  const points = simplify(input), n = points.length / 3;
-  const f = x => Number(x.toFixed(4));
+export function svgInk(input, width) {
+  const shape = new InkShape(); shape.update(simplify(input), 0, width);
+  const f = x => Number(x.toFixed(4)), xy = values => values.map(f).join(' ');
   let path = '';
-  for (let i = 0; i < n; i++) {
-    const x = points[i * 3], y = points[i * 3 + 1], r = points[i * 3 + 2], k = r * 0.5522847498;
-    path += `M${f(x + r)} ${f(y)}C${f(x + r)} ${f(y + k)} ${f(x + k)} ${f(y + r)} ${f(x)} ${f(y + r)}`
-      + `C${f(x - k)} ${f(y + r)} ${f(x - r)} ${f(y + k)} ${f(x - r)} ${f(y)}`
-      + `C${f(x - r)} ${f(y - k)} ${f(x - k)} ${f(y - r)} ${f(x)} ${f(y - r)}`
-      + `C${f(x + k)} ${f(y - r)} ${f(x + r)} ${f(y - k)} ${f(x + r)} ${f(y)}Z`;
-    if (!i) continue;
-    const a = 3 * (i - 1), dx = x - points[a], dy = y - points[a + 1], len = Math.hypot(dx, dy);
-    if (len < 1e-8) continue;
-    const nx = -dy / len, ny = dx / len, pr = points[a + 2];
-    path += `M${f(points[a] + nx * pr)} ${f(points[a + 1] + ny * pr)}`
-      + `L${f(points[a] - nx * pr)} ${f(points[a + 1] - ny * pr)}`
-      + `L${f(x - nx * r)} ${f(y - ny * r)}L${f(x + nx * r)} ${f(y + ny * r)}Z`;
-  }
+  shape.path({
+    moveTo: (...p) => { path += `M${xy(p)}`; },
+    lineTo: (...p) => { path += `L${xy(p)}`; },
+    quadraticCurveTo: (...p) => { path += `Q${xy(p)}`; },
+    closePath: () => { path += 'Z'; },
+    arc: (x, y, r) => {
+      const k = r * 0.5522847498;
+      path += `C${xy([x + r, y + k, x + k, y + r, x, y + r])}`
+        + `C${xy([x - k, y + r, x - r, y + k, x - r, y])}`
+        + `C${xy([x - r, y - k, x - k, y - r, x, y - r])}`
+        + `C${xy([x + k, y - r, x + r, y - k, x + r, y])}`;
+    },
+  });
   return path;
 }
 
@@ -85,7 +85,7 @@ export async function exportPDF(snapshot, strokes) {
     page.pushOperators(pushGraphicsState(), concatTransformationMatrix(...transforms[rotation]));
     for (const stroke of strokes) {
       if (!stroke.visible || stroke.page !== i + 1 || !stroke.points.length) continue;
-      const path = stroke.engine === 3 ? outlinePath(perfectOutline(stroke.raw, stroke.width)) : svgInk(stroke.points);
+      const path = stroke.engine === 3 ? outlinePath(perfectOutline(stroke.raw, stroke.width)) : svgInk(stroke.points, stroke.width);
       page.drawSvgPath(path, { x: 0, y: 0, scale: MM,
         color: rgb(23 / 255, 33 / 255, 43 / 255), borderWidth: 0 });
     }

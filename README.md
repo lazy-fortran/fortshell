@@ -68,7 +68,8 @@ content and adds vector ink. The app imports one working notebook at a time.
 
 **Compare** offers the same model in JavaScript and Fortran WebAssembly,
 raw input, and the independent perfect-freehand outline as a Canvas 2D
-reference. Canvas 2D, WebGL2, and WebGPU render the shared capsule geometry.
+reference. Canvas 2D, WebGL2, and WebGPU render the same quadratic outline
+with gently tapered round caps.
 An unsupported explicitly selected renderer reports an error. Device loss
 reports a switch to Canvas 2D with retained document data.
 
@@ -77,7 +78,8 @@ paired timing intervals, renderer submission, and the next animation frame.
 The downloadable JSON records browser details and unsupported backends.
 These measurements do not measure Pencil-to-display latency. Renderer timings
 separate a full 1200-sample redraw from four-sample incremental frames.
-Interactive drawing appends only new geometry. Results include the observed
+Interactive drawing caches outline chunks and replaces only the affected region,
+so stationary samples cannot darken antialiased edges. Results include the observed
 browser timer resolution. A zero duration can mean below that resolution.
 
 **Record drawing latency** measures the live pointer, document and rendering

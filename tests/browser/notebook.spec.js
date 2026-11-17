@@ -417,3 +417,56 @@ for (const renderer of ['webgl', 'webgpu']) test(`${renderer} draws, resizes, an
   await page.locator('#zoom-in').click();
   await expect.poll(() => darkPixels(page)).toBeGreaterThan(100);
 });
+test('stationary pen samples do not darken the antialiased edge', async ({ page }) => {
+  await open(page);
+  const result = await page.evaluate(() => {
+    const c = document.getElementById('active'), b = c.getBoundingClientRect();
+    c.setPointerCapture = () => {}; c.hasPointerCapture = () => false;
+    const send = (type, i, x = b.width * 0.4, y = b.height * 0.4) => {
+      const e = new PointerEvent(type, { bubbles: true, cancelable: true, pointerType: 'pen',
+        pointerId: 99, button: 0, buttons: type === 'pointerup' ? 0 : 1,
+        clientX: b.left + x, clientY: b.top + y, pressure: 0.5 });
+      Object.defineProperty(e, 'timeStamp', { value: 1000 + i * 4 }); c.dispatchEvent(e);
+    };
+    send('pointerdown', 0);
+    const ctx = c.getContext('2d'), before = ctx.getImageData(0, 0, c.width, c.height).data;
+    for (let i = 1; i <= 200; i++) send('onpointerrawupdate' in c ? 'pointerrawupdate' : 'pointermove', i);
+    const after = ctx.getImageData(0, 0, c.width, c.height).data;
+    let changed = 0;
+    for (let i = 3; i < after.length; i += 4) if (after[i] !== before[i]) changed++;
+    send('pointerup', 201);
+    return { changed, samples: window.fortshell.module._fs_size(1) };
+  });
+  expect(result.samples).toBeGreaterThan(100);
+  expect(result.changed).toBe(0);
+});
+
+test('live curved ink keeps identical edge coverage at lift-off', async ({ page }) => {
+  await open(page); await page.locator('#compare-toggle').click();
+  await page.locator('#engine').selectOption('raw');
+  const result = await page.evaluate(() => {
+    const c = document.getElementById('active'), b = c.getBoundingClientRect();
+    c.setPointerCapture = () => {}; c.hasPointerCapture = () => false;
+    const send = (type, i) => {
+      const t = i / 239, x = b.width * (0.5 + 0.3 * Math.sin(t * 4 * Math.PI)),
+        y = b.height * (0.5 + 0.25 * Math.sin(t * 6 * Math.PI));
+      const e = new PointerEvent(type, { bubbles: true, cancelable: true, pointerType: 'pen',
+        pointerId: 99, button: 0, buttons: type === 'pointerup' ? 0 : 1,
+        clientX: b.left + x, clientY: b.top + y, pressure: 0.5 });
+      Object.defineProperty(e, 'timeStamp', { value: 1000 + i * 4 }); c.dispatchEvent(e);
+    };
+    send('pointerdown', 0);
+    for (let i = 1; i < 240; i++) send('onpointerrawupdate' in c ? 'pointerrawupdate' : 'pointermove', i);
+    const before = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+    send('pointerup', 239);
+    const after = document.getElementById('committed').getContext('2d').getImageData(0, 0, c.width, c.height).data;
+    let differences = 0, fractional = 0;
+    for (let i = 3; i < after.length; i += 4) {
+      if (before[i] !== after[i]) differences++;
+      if (after[i] > 0 && after[i] < 255) fractional++;
+    }
+    return { differences, fractional };
+  });
+  expect(result.fractional).toBeGreaterThan(100);
+  expect(result.differences).toBe(0);
+});
