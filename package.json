@@ -1,0 +1,23 @@
+{
+  "name": "fortshell",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build:web": "node tools/bundle.mjs",
+    "benchmark": "node tools/benchmark.mjs",
+    "benchmark:latency": "node tools/latency.mjs",
+    "test": "node --test tests/*.test.mjs",
+    "test:browser": "playwright test",
+    "serve": "node tools/serve.mjs"
+  },
+  "dependencies": {
+    "pdf-lib": "1.17.1",
+    "pdfjs-dist": "5.4.394",
+    "perfect-freehand": "1.2.2"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.61.1",
+    "esbuild": "0.27.0"
+  }
+}
