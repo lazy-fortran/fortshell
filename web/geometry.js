@@ -21,8 +21,16 @@ export class InkShape {
       if (previous && d < 1e-7) continue;
       const r = previous ? Math.max(previous[2] - d * 0.25,
         Math.min(previous[2] + d * 0.25, input[i + 2])) : input[i + 2];
-      this.points.push([x, y, r]);
-      this.distance.push((this.distance.at(-1) || 0) + d);
+      const start = this.distance.at(-1) || 0;
+      // Sparse events and simplified PDFs still need stations inside the tapers.
+      const steps = Math.max(1, Math.ceil(d / Math.max(0.05, width / 2)));
+      for (let j = 1; j <= steps; j++) {
+        const u = j / steps;
+        this.points.push(j === steps ? [x, y, r] : [
+          previous[0] + u * (x - previous[0]), previous[1] + u * (y - previous[1]),
+          previous[2] + u * (r - previous[2])]);
+        this.distance.push(start + u * d);
+      }
     }
     return Math.floor(changed / INK_CHUNK);
   }

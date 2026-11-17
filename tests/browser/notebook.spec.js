@@ -470,3 +470,31 @@ test('live curved ink keeps identical edge coverage at lift-off', async ({ page 
   expect(result.fractional).toBeGreaterThan(100);
   expect(result.differences).toBe(0);
 });
+
+test('sparse vector PDF ink keeps its body width and tapered caps', async ({ page }) => {
+  await open(page);
+  await page.evaluate(async () => {
+    const f = window.fortshell, M = f.module;
+    M._fs_begin(10, 0, 2);
+    M.HEAPF32.set([50, 105, 0, 0.5, 247, 105, 1, 0.5], M._fs_input() / 4);
+    M.HEAPF32.set([50, 105, 5, 247, 105, 5], M._fs_output() / 4);
+    M._fs_append(2); M._fs_finish(0); await f.requestPage();
+  });
+  const [download] = await Promise.all([page.waitForEvent('download'), page.locator('[data-id=export]').click()]);
+  const revision = await page.evaluate(() => window.fortshell.pageRevision);
+  await page.locator('#file').setInputFiles({ name: 'caps.pdf', mimeType: 'application/pdf', buffer: await readFile(await download.path()) });
+  await page.waitForFunction(r => window.fortshell.pageRevision > r && !window.fortshell.busy, revision);
+  const widths = await page.evaluate(() => {
+    const c = document.getElementById('background'), ctx = c.getContext('2d');
+    return [50, 148, 247].map(mm => {
+      const column = ctx.getImageData(Math.round(mm / 297 * c.width), 0, 1, c.height).data;
+      let ink = 0;
+      for (let i = 0; i < column.length; i += 4) if (column[i] < 100) ink++;
+      return ink * 210 / c.height;
+    });
+  });
+  expect(widths[1]).toBeGreaterThan(9.4); expect(widths[1]).toBeLessThan(10.6);
+  for (const cap of [widths[0], widths[2]]) {
+    expect(cap).toBeGreaterThan(6); expect(cap).toBeLessThan(7);
+  }
+});

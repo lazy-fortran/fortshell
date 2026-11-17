@@ -28,9 +28,10 @@ test('eraser hits the segment between widely spaced samples', () => {
 test('brush caps taper without thinning dots or accumulating stationary pressure', () => {
   const shape = new InkShape(), points = new Float32Array([0, 0, 0.75, 5, 0, 0.75, 10, 0, 0.75]);
   shape.update(points, 0, 1.5);
-  assert.equal(shape.radius(1), 0.75);
-  assert.ok(Math.abs(shape.radius(0) / shape.radius(1) - 0.65) < 1e-12);
-  assert.equal(shape.radius(2), shape.radius(0));
+  const middle = shape.points.findIndex(p => p[0] === 5);
+  assert.equal(shape.radius(middle), 0.75);
+  assert.ok(Math.abs(shape.radius(0) / shape.radius(middle) - 0.65) < 1e-12);
+  assert.equal(shape.radius(shape.points.length - 1), shape.radius(0));
   const dot = new InkShape(); dot.update(new Float32Array([4, 8, 0.75, 4, 8, 1]), 0, 1.5);
   assert.equal(dot.points.length, 1); assert.equal(dot.radius(0), 0.75);
 });
@@ -46,4 +47,12 @@ test('outline geometry is independent of coalesced batch size, including reversa
   }
   const reversal = mesh(new Float32Array([0, 0, 0.5, 10, 0, 0.5, 0, 0, 0.5]));
   assert.ok(reversal.every(Number.isFinite));
+});
+
+test('sparse straight strokes keep full body width between tapered caps', () => {
+  const shape = new InkShape(); shape.update(new Float32Array([0, 0, 0.75, 30, 0, 0.75]), 0, 1.5);
+  const middle = shape.points.findIndex(p => p[0] >= 14 && p[0] <= 16);
+  assert.ok(middle >= 0);
+  assert.equal(shape.radius(middle), 0.75);
+  assert.equal(shape.points.at(-1)[0], 30);
 });
