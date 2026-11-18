@@ -20,6 +20,7 @@ program test_document
     n = fs_finish(0)
     call c_f_pointer(fs_data(id,1),data,[3,2])
     if (any(data(1:2,2)/=[11.,21.])) error stop 'final endpoint'
+    if (any(abs(data(3,1:2)-0.19175_c_float)>1e-6_c_float)) error stop 'half-pressure width'
     if (fs_undo()/=id) error stop 'undo id'
     if (fs_visible(id)/=0) error stop 'undo visibility'
     if (fs_redo()/=id) error stop 'redo id'

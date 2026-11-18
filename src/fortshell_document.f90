@@ -151,8 +151,8 @@ contains
             else
                 if (.not. all(ieee_is_finite(output_buffer(:,1:n)))) return
             end if
-            ! Light pen contact must remain visible instead of becoming a hairline.
-            output_buffer(3,1:n) = max(output_buffer(3,1:n),s%width*0.35)
+            ! Allow the lightest modeled pressure while keeping a positive radius.
+            output_buffer(3,1:n) = max(output_buffer(3,1:n),s%width*0.09_c_float)
             s%raw(:,s%n+1:total) = input_buffer(:,1:n)
             s%modeled(:,s%n+1:total) = output_buffer(:,1:n)
             s%n = total

@@ -37,7 +37,13 @@ function prepare(renderer, points, first, width, live, predicted) {
   for (let i = from; i < oldChunks.length; i++) bounds = union(bounds, oldChunks[i].bounds);
   for (let i = from; i * chunkSize < shape.points.length; i++) {
     const start = i * chunkSize, end = Math.min(start + chunkSize, shape.points.length);
-    const outline = shape.outline(start, end), chunk = { bounds: shape.bounds(outline) };
+    const outline = shape.outline(start, end);
+    // Keep an isolated tap legible even when it lands between display pixels.
+    if (shape.points.length === 1) {
+      const dot = outline.caps[0];
+      dot[2] = Math.max(dot[2], 1 / Math.min(view.sx, view.sy));
+    }
+    const chunk = { bounds: shape.bounds(outline) };
     if (renderer.ctx) { chunk.path = new Path2D(); shape.path(chunk.path, outline); }
     else chunk.mesh = shape.meshOutline(outline, Math.max(view.sx, view.sy));
     shape.chunks[i] = chunk; bounds = union(bounds, chunk.bounds);

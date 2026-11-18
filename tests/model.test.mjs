@@ -30,7 +30,7 @@ test('brush caps taper without thinning dots or accumulating stationary pressure
   shape.update(points, 0, 1.5);
   const middle = shape.points.findIndex(p => p[0] === 5);
   assert.equal(shape.radius(middle), 0.75);
-  assert.ok(Math.abs(shape.radius(0) / shape.radius(middle) - 0.65) < 1e-12);
+  assert.ok(Math.abs(shape.radius(0) / shape.radius(middle) - 0.8) < 1e-12);
   assert.equal(shape.radius(shape.points.length - 1), shape.radius(0));
   const dot = new InkShape(); dot.update(new Float32Array([4, 8, 0.75, 4, 8, 1]), 0, 1.5);
   assert.equal(dot.points.length, 1); assert.equal(dot.radius(0), 0.75);

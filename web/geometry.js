@@ -136,9 +136,10 @@ export class InkShape {
   }
   radius(i) {
     const total = this.distance.at(-1), d = Math.min(this.distance[i], total - this.distance[i]);
-    const u = Math.min(1, d / this.width), strength = Math.min(1, total / (2 * this.width));
-    // Short marks stay round. Longer strokes have softly rounded, narrower ends.
-    return this.points[i][2] * (1 - 0.35 * strength * (1 - u * u * (3 - 2 * u)));
+    const taper = 0.75 * this.width;
+    const u = Math.min(1, d / taper), strength = Math.min(1, total / (2 * taper));
+    // A shallow taper rounds the tips without pinching short marks.
+    return this.points[i][2] * (1 - 0.20 * strength * (1 - u * u * (3 - 2 * u)));
   }
   edge(i) {
     const p = this.points[i], before = this.points[Math.max(0, i - 1)],

@@ -110,8 +110,9 @@ test('a light first pen contact paints immediately without a control update', as
       visible: pixels.some((value, i) => i % 4 === 3 && value > 127) };
   });
   expect(first.steps).toBe(0); expect(first.size).toBe(1);
-  expect(first.width).toBeGreaterThan(0.25); expect(first.visible).toBe(true);
+  expect(first.width).toBeCloseTo(0.2823, 4); expect(first.visible).toBe(true);
   await page.mouse.up();
+  await expect.poll(() => darkPixels(page)).toBeGreaterThan(0);
 });
 
 test('palm contacts before and after a pen stroke cannot move or select the page', async ({ page }) => {
@@ -661,16 +662,19 @@ test('sparse vector PDF ink keeps its body width and tapered caps', async ({ pag
   await page.waitForFunction(r => window.fortshell.pageRevision > r && !window.fortshell.busy, revision);
   const widths = await page.evaluate(() => {
     const c = document.getElementById('background'), ctx = c.getContext('2d');
-    return [50, 148, 247].map(mm => {
+    return [50, 55, 148, 242, 247].map(mm => {
       const column = ctx.getImageData(Math.round(mm / 297 * c.width), 0, 1, c.height).data;
       let ink = 0;
       for (let i = 0; i < column.length; i += 4) if (column[i] < 100) ink++;
       return ink * 210 / c.height;
     });
   });
-  expect(widths[1]).toBeGreaterThan(9.4); expect(widths[1]).toBeLessThan(10.6);
-  for (const cap of [widths[0], widths[2]]) {
-    expect(cap).toBeGreaterThan(6); expect(cap).toBeLessThan(7);
+  expect(widths[2]).toBeGreaterThan(9.4); expect(widths[2]).toBeLessThan(10.6);
+  for (const shoulder of [widths[1], widths[3]]) {
+    expect(shoulder).toBeGreaterThan(9); expect(shoulder).toBeLessThan(10);
+  }
+  for (const cap of [widths[0], widths[4]]) {
+    expect(cap).toBeGreaterThan(7.5); expect(cap).toBeLessThan(8.5);
   }
 });
 
