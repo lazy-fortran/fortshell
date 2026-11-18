@@ -10,7 +10,8 @@ annotate a PDF, or export a vector PDF and an editable `.fortshell` notebook.
 Undo, redo, stroke erasing, pressure, zoom, and immediate keyboard command
 entry are available. Pens and mice write. Touches on the page are ignored
 to prevent palm gestures. Use the page and zoom controls for navigation.
-The default black pen is 1.5 mm. Before tapering, pressure sets the width
+The default black pen is 1.5 mm. Six pen colours are available, and ink that
+leaves the page is clipped at its edge. Before tapering, pressure sets the width
 between 18 and 100 percent of the selected size. An isolated tap has a
 minimum raster radius of one display pixel. The notebook retains raw pressure.
 
@@ -70,7 +71,7 @@ JavaScript handles browser events, graphics APIs, storage, and the PDF
 libraries. PDF.js renders imported pages. pdf-lib preserves original PDF page
 content and adds vector ink. The app imports one working notebook at a time.
 
-**Compare** offers the same model in JavaScript and Fortran WebAssembly,
+**Ink comparison**, in the overflow menu with Clear page, offers the same model in JavaScript and Fortran WebAssembly,
 raw input, and the independent perfect-freehand outline as a Canvas 2D
 reference. Canvas 2D, WebGL2, and WebGPU share cubic stroke outlines with
 tapered round caps and round joins at sharp turns. A local curve fit reduces

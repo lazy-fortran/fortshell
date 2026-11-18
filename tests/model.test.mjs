@@ -148,3 +148,14 @@ test('replacing a forecast restores measured geometry across chunk boundaries', 
   assert.deepEqual(shape.mesh(), measured.mesh());
   assert.equal(shape.ends.length, 130); assert.equal(shape.predicted, 0);
 });
+
+test('pen colours are palette indices in notebooks and exports', async () => {
+  const { validateSnapshot } = await import('../web/notebook.js');
+  const { inkRGB, INK_COLOURS } = await import('../web/geometry.js');
+  const notebook = colour => ({ meta: { version: 1, pages: [[297, 210]] }, chunks: [],
+    strokes: [{ id: 1, page: 1, width: 1.5, engine: 0, colour }] });
+  for (const colour of [undefined, 0, INK_COLOURS.length - 1]) assert.doesNotThrow(() => validateSnapshot(notebook(colour)));
+  for (const colour of [-1, 1.5, INK_COLOURS.length, '1']) assert.throws(() => validateSnapshot(notebook(colour)), /Invalid stroke/);
+  assert.deepEqual(inkRGB(0), [0, 0, 0]);
+  assert.deepEqual(inkRGB(2).map(x => Math.round(x * 255)), [0xd3, 0x2f, 0x2f]);
+});

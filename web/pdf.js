@@ -1,5 +1,5 @@
 import { perfectOutline, outlinePath } from './perfect.js';
-import { InkShape, LEGACY_GEOMETRY } from './geometry.js';
+import { InkShape, LEGACY_GEOMETRY, inkRGB } from './geometry.js';
 let pdfjs;
 const MM = 72 / 25.4;
 
@@ -63,7 +63,7 @@ export async function exportPDF(snapshot, strokes) {
       const path = stroke.engine === 3 ? outlinePath(perfectOutline(stroke.raw, stroke.width))
         : svgInk(stroke.points, stroke.width, stroke.geometry);
       page.drawSvgPath(path, { x: 0, y: 0, scale: MM,
-        color: rgb(0, 0, 0), borderWidth: 0 });
+        color: rgb(...inkRGB(stroke.colour)), borderWidth: 0 });
     }
     page.pushOperators(popGraphicsState());
   }

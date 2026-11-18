@@ -1,5 +1,10 @@
 const TAU = 2 * Math.PI;
 export const INK = '#000';
+// Pen palette; strokes store an index. Matches FS_COLOURS in the document model.
+export const INK_COLOURS = ['#000000', '#1a56c4', '#d32f2f', '#2e7d32', '#ef6c00', '#7b1fa2'];
+export const inkColour = index => INK_COLOURS[index] ?? INK;
+export const inkRGB = index => { const c = inkColour(index).replace('#', '').padEnd(6, '0');
+  return [0, 2, 4].map(i => parseInt(c.slice(i, i + 2), 16) / 255); };
 export const INK_CHUNK = 8;
 export const LEGACY_GEOMETRY = 1;
 export const GEOMETRY_REVISION = 2;

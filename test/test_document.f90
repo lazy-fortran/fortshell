@@ -11,6 +11,12 @@ program test_document
     call fs_next()
     if (fs_pages(0)/=2 .or. fs_current()/=2) error stop 'instant next page'
     call fs_previous()
+    if (fs_colour(-1)/=0) error stop 'black pen by default'
+    if (fs_colour(2)/=2 .or. fs_colour(FS_COLOURS)/=2) error stop 'pen colour selection'
+    if (fs_begin(0.65_c_float,FS_COLOURS,0)/=0) error stop 'colour outside the palette'
+    id = fs_begin(0.65_c_float,2,0)
+    if (nint(fs_meta(id,1))/=2) error stop 'stroke colour'
+    n = fs_finish(1)
     id = fs_begin(0.65_c_float,0,0)
     call c_f_pointer(fs_input(),input,[4,2048])
     input(:,1) = [10.,20.,0.,0.5]

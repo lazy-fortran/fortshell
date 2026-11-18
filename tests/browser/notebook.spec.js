@@ -250,7 +250,7 @@ test('a pending save does not delay the next pen contact or resize the page', as
 
 for (const scheduling of ['frame', 'immediate']) {
   test(`${scheduling} drawing submission and live latency recording`, async ({ page }) => {
-    await open(page); await page.locator('#compare-toggle').click();
+    await open(page); await page.locator('#more summary').click(); await page.locator('#compare-toggle').click();
     await page.locator('#scheduling').selectOption(scheduling);
     await page.locator('#latency-toggle').click();
     await page.evaluate(() => {
@@ -463,7 +463,7 @@ test('language parity and coalesced batch sizes', async ({ page }) => {
     return outputs;
   });
   for (const output of report) expect(output).toEqual(report[0]);
-  await page.locator('#compare-toggle').click(); await page.locator('#engine').selectOption('js');
+  await page.locator('#more summary').click(); await page.locator('#compare-toggle').click(); await page.locator('#engine').selectOption('js');
   await draw(page); expect(await darkPixels(page)).toBeGreaterThan(100);
 });
 
@@ -490,7 +490,7 @@ test('WASM document growth preserves old strokes and long sample buffers', async
 });
 
 test('reference ink survives reload, erasure and undo', async ({ page }) => {
-  await open(page); await page.locator('#compare-toggle').click();
+  await open(page); await page.locator('#more summary').click(); await page.locator('#compare-toggle').click();
   await page.locator('#engine').selectOption('perfect'); await draw(page);
   expect(await darkPixels(page)).toBeGreaterThan(100);
   await page.evaluate(() => window.fortshell.flush());
@@ -535,7 +535,7 @@ for (const renderer of ['webgl', 'webgpu']) test(`${renderer} draws, resizes, an
     const supported = await page.evaluate(async () => !!(await navigator.gpu?.requestAdapter()));
     test.skip(!supported, 'No WebGPU adapter on this browser host');
   }
-  await page.locator('#compare-toggle').click(); await page.locator('#renderer').selectOption(renderer);
+  await page.locator('#more summary').click(); await page.locator('#compare-toggle').click(); await page.locator('#renderer').selectOption(renderer);
   await expect.poll(() => page.evaluate(() => window.fortshell.renderer)).toBe(renderer);
   await page.waitForTimeout(300);
   await expect(page.locator('#error')).toBeHidden();
@@ -605,7 +605,7 @@ test('ink edges follow geometric pixel coverage', async ({ page }) => {
 });
 
 test('live curved ink keeps identical edge coverage at lift-off', async ({ page }) => {
-  await open(page); await page.locator('#compare-toggle').click();
+  await open(page); await page.locator('#more summary').click(); await page.locator('#compare-toggle').click();
   await page.locator('#engine').selectOption('raw');
   const result = await page.evaluate(() => {
     const c = document.getElementById('active'), b = c.getBoundingClientRect();
@@ -735,7 +735,7 @@ test('sparse vector PDF ink keeps its body width and tapered caps', async ({ pag
 test('clear page removes saved ink on this page and preserves other pages', async ({ page }) => {
   await open(page); await draw(page);
   await page.locator('[data-id=next]').click(); await draw(page);
-  await page.locator('#clear-page').click();
+  await page.locator('#more summary').click(); await page.locator('#clear-page').click();
   expect(await darkPixels(page)).toBe(0);
   await page.evaluate(() => window.fortshell.flush());
   await page.reload(); await page.waitForFunction(() => window.fortshell?.ready);
@@ -745,7 +745,7 @@ test('clear page removes saved ink on this page and preserves other pages', asyn
 });
 
 test('predicted ink shares the pen taper and disappears when measurements replace it', async ({ page }) => {
-  await open(page); await page.locator('#compare-toggle').click(); await page.locator('#engine').selectOption('raw');
+  await open(page); await page.locator('#more summary').click(); await page.locator('#compare-toggle').click(); await page.locator('#engine').selectOption('raw');
   const result = await page.evaluate(async () => {
     const c = document.getElementById('active'), b = document.getElementById('paper').getBoundingClientRect();
     c.setPointerCapture = () => {}; c.hasPointerCapture = () => false;
@@ -821,4 +821,40 @@ test('app update activates without closing the notebook and preserves unsaved in
     expect(await darkPixels(page)).toBeGreaterThan(100);
     await expect(page.locator('#error')).toBeHidden();
   } finally { server.closeAllConnections(); server.close(); await context.close(); }
+});
+
+test('pen colours, toggle state and ink past the page edge', async ({ page }) => {
+  await open(page);
+  await expect(page.locator('[data-id=pen]')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('[data-id=colour-0]')).toHaveAttribute('aria-pressed', 'true');
+  await page.locator('[data-id=colour-2]').click();
+  await expect(page.locator('[data-id=colour-2]')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('[data-id=colour-0]')).toHaveAttribute('aria-pressed', 'false');
+  await draw(page);
+  const pixels = await page.evaluate(() => {
+    const source = document.getElementById('committed'), canvas = document.createElement('canvas');
+    canvas.width = source.width; canvas.height = source.height;
+    const c = canvas.getContext('2d'); c.drawImage(source, 0, 0);
+    const data = c.getImageData(0, 0, canvas.width, canvas.height).data;
+    let red = 0, black = 0;
+    for (let i = 0; i < data.length; i += 4) if (data[i + 3] > 200) {
+      if (data[i] > 150 && data[i + 1] < 90) red++; else if (data[i] < 60) black++;
+    }
+    return { red, black };
+  });
+  expect(pixels.red).toBeGreaterThan(50);
+  expect(pixels.black).toBe(0);
+  expect(await page.evaluate(() => window.fortshell.module._fs_meta(1, 1))).toBe(2);
+  await page.locator('[data-id=eraser]').click();
+  await expect(page.locator('[data-id=eraser]')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('[data-id=colour-2]')).toHaveAttribute('aria-pressed', 'false');
+  await page.locator('[data-id=colour-1]').click();
+  await expect(page.locator('[data-id=pen]')).toHaveAttribute('aria-pressed', 'true');
+  const box = await page.locator('#active').boundingBox();
+  await page.mouse.move(box.x + box.width * 0.9, box.y + box.height * 0.5); await page.mouse.down();
+  await page.mouse.move(box.x + box.width + 40, box.y + box.height * 0.5, { steps: 10 }); await page.mouse.up();
+  await page.waitForFunction(() => window.fortshell.module._fs_count() >= 2);
+  const lastX = await page.evaluate(() => { const M = window.fortshell.module, id = M._fs_count();
+    return new Float32Array(M.HEAPU8.buffer, M._fs_data(id, 0), M._fs_size(id) * 4).at(-4); });
+  expect(lastX).toBeGreaterThan(297);
 });

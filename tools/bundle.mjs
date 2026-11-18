@@ -3,7 +3,7 @@ import { mkdir, cp, copyFile, readdir, writeFile, rm } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 const root = resolve(import.meta.dirname, '..'), out = resolve(root, 'build/web');
-const ui = process.env.FORTUI_PATH || resolve(root, '../../fortui');
+const ui = process.env.FORTUI_PATH || resolve(root, '../fortui');
 const ink = process.env.FORTINK_PATH || resolve(root, '../fortink');
 await mkdir(out, { recursive: true });
 await rm(resolve(out, 'chunks'), { recursive: true, force: true });

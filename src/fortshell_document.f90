@@ -7,7 +7,9 @@ module fortshell_document
     public :: fs_reset, fs_begin, fs_append, fs_finish, fs_count, fs_current, fs_pages, &
         fs_page, fs_next, fs_previous, fs_visible, fs_toggle, fs_undo, fs_redo, &
         fs_size, fs_data, fs_meta, fs_input, fs_output, fs_width, fs_tool, &
-        fs_dimensions, fs_set_dimensions, fs_stroke_page, fs_can_undo, fs_can_redo
+        fs_dimensions, fs_set_dimensions, fs_stroke_page, fs_can_undo, fs_can_redo, fs_colour
+    ! Pen colours are indices into the host's palette.
+    integer, parameter, public :: FS_COLOURS = 6
     integer, parameter :: BATCH = 2048
     real(c_float), target, save :: input_buffer(4, BATCH), output_buffer(3, BATCH)
     type :: stroke_t
@@ -21,7 +23,7 @@ module fortshell_document
     integer, allocatable, save :: history(:, :)
     integer, save :: stroke_count = 0, current_page = 1, page_count = 1
     integer, save :: history_head = 0, history_count = 0, active = 0
-    integer(c_int), save :: tool = 0
+    integer(c_int), save :: tool = 0, pen_colour = 0
     real(c_float), save :: pen_width = 1.5
     type(ink_state_t), save :: ink
 contains
@@ -99,6 +101,7 @@ contains
         fs_begin = 0
         if (.not. ieee_is_finite(width)) return
         if (width <= 0 .or. width > 100) return
+        if (colour < 0 .or. colour >= FS_COLOURS) return
         if (active /= 0) return
         if (.not. allocated(strokes)) call fs_reset()
         if (stroke_count == size(strokes)) then
@@ -284,6 +287,12 @@ contains
         integer(c_int), value :: value
         if (value >= 0 .and. value <= 2) tool = value
         fs_tool = tool
+    end function
+
+    integer(c_int) function fs_colour(value) bind(C)
+        integer(c_int), value :: value
+        if (value >= 0 .and. value < FS_COLOURS) pen_colour = value
+        fs_colour = pen_colour
     end function
 
     real(c_float) function fs_dimensions(page, axis) bind(C)

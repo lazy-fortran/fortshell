@@ -1,6 +1,5 @@
-import { InkShape, INK_CHUNK, INK, GEOMETRY_REVISION } from './geometry.js';
+import { InkShape, INK_CHUNK, INK, GEOMETRY_REVISION, inkColour, inkRGB } from './geometry.js';
 
-const colour = [0, 0, 0, 1];
 export async function createRenderer(canvas, backend, width, height, view) {
   if (backend === 'canvas') return new CanvasRenderer(canvas, width, height, view);
   if (backend === 'webgl') return new GLRenderer(canvas, width, height);
@@ -94,12 +93,12 @@ class CanvasRenderer {
     const c = this.ctx;
     c.setTransform(1, 0, 0, 1, 0, 0); c.clearRect(0, 0, this.canvas.width, this.canvas.height);
   }
-  draw(points, first = 0, width, live = false, predicted = [], revision = GEOMETRY_REVISION) {
+  draw(points, first = 0, width, live = false, predicted = [], revision = GEOMETRY_REVISION, colour = 0) {
     if (!points.length) return;
     const { chunks, clip } = prepare(this, points, first, width, live, predicted, revision);
-    this.paint(chunks, clip, live);
+    this.paint(chunks, clip, live, colour);
   }
-  paint(chunks, [left, top, width, height], live) {
+  paint(chunks, [left, top, width, height], live, colour = 0) {
     if (!width || !height) return;
     const { ctx, raster: { x, y, sx, sy } } = this;
     if (!this.coverage) {
@@ -125,15 +124,15 @@ class CanvasRenderer {
         coverage.setTransform(1, 0, 0, 1, 0, 0);
         coverage.clearRect(0, 0, w * 2, h * 2);
         coverage.setTransform(2 * sx, 0, 0, 2 * sy, -2 * (x + column), -2 * (y + row));
-        coverage.fillStyle = INK; coverage.fill(path);
+        coverage.fillStyle = inkColour(colour); coverage.fill(path);
         ctx.drawImage(coverage.canvas, 0, 0, w * 2, h * 2, column, row, w, h);
       }
     }
   }
-  commit(target, points, width, drawn, revision) {
+  commit(target, points, width, drawn, revision, colour = 0) {
     const tip = this.shape?.points.at(-1), at = points.length - 3;
     if (this.shape?.predicted || drawn !== points.length / 3 || !tip || tip[0] !== points[at] || tip[1] !== points[at + 1])
-      this.draw(points, this.shape ? Math.min(drawn, points.length / 3 - 1) : 0, width, true, [], revision);
+      this.draw(points, this.shape ? Math.min(drawn, points.length / 3 - 1) : 0, width, true, [], revision, colour);
     // Preserve the live coverage at lift-off instead of rasterizing it a second time.
     target.ctx.setTransform(1, 0, 0, 1, 0, 0);
     target.ctx.drawImage(this.canvas, 0, 0);
@@ -153,8 +152,8 @@ class GLRenderer {
       in vec2 point; uniform vec2 page;
       void main() { gl_Position = vec4(point.x/page.x*2.-1.,1.-point.y/page.y*2.,0.,1.); }`,
       `#version 300 es
-      precision highp float; out vec4 pixel;
-      void main() { pixel = vec4(${colour.join(',')}); }`,
+      precision highp float; uniform vec4 ink; out vec4 pixel;
+      void main() { pixel = ink; }`,
     ];
     for (let i = 0; i < 2; i++) {
       const shader = gl.createShader(i ? gl.FRAGMENT_SHADER : gl.VERTEX_SHADER);
@@ -166,6 +165,7 @@ class GLRenderer {
     if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(program));
     gl.useProgram(program);
     gl.uniform2f(gl.getUniformLocation(program, 'page'), width, height);
+    this.ink = gl.getUniformLocation(program, 'ink');
     this.program = program; this.buffer = gl.createBuffer(); this.capacity = 0;
     gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer);
     const loc = gl.getAttribLocation(program, 'point');
@@ -176,10 +176,11 @@ class GLRenderer {
     gl.viewport(0, 0, canvas.width, canvas.height); this.clear();
   }
   clear() { this.shape = null; this.gl.disable(this.gl.SCISSOR_TEST); this.gl.clearColor(0, 0, 0, 0); this.gl.clear(this.gl.COLOR_BUFFER_BIT); }
-  draw(points, first = 0, width, live = false, predicted = [], revision = GEOMETRY_REVISION) {
+  draw(points, first = 0, width, live = false, predicted = [], revision = GEOMETRY_REVISION, colour = 0) {
     if (!points.length) return;
     const { chunks, clip } = prepare(this, points, first, width, live, predicted, revision);
     const gl = this.gl, data = vertices(chunks);
+    gl.uniform4f(this.ink, ...inkRGB(colour), 1);
     if (!data.length || !clip[2] || !clip[3]) return;
     gl.enable(gl.SCISSOR_TEST); gl.scissor(clip[0], this.canvas.height - clip[1] - clip[3], clip[2], clip[3]);
     if (live) { gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT); }
@@ -220,17 +221,24 @@ class GPUrenderer {
     r.msaa = d.createTexture({ size: [canvas.width, canvas.height], format, sampleCount: 4,
       usage: GPUTextureUsage.RENDER_ATTACHMENT });
     r.view = r.texture.createView(); r.msaaView = r.msaa.createView();
-    const shader = d.createShaderModule({ code: `
-      @vertex fn vertex(@location(0) point: vec2f) -> @builtin(position) vec4f {
-        return vec4f(point.x/${width}*2.-1.,1.-point.y/${height}*2.,0.,1.);
+    // One pipeline per palette colour, created on first use.
+    r.pipelines = new Map();
+    r.pipeline = colour => {
+      if (!r.pipelines.has(colour)) {
+        const shader = d.createShaderModule({ code: `
+          @vertex fn vertex(@location(0) point: vec2f) -> @builtin(position) vec4f {
+            return vec4f(point.x/${width}*2.-1.,1.-point.y/${height}*2.,0.,1.);
+          }
+          @fragment fn fragment() -> @location(0) vec4f { return vec4f(${inkRGB(colour).join(',')},1.); }
+        ` });
+        r.pipelines.set(colour, d.createRenderPipeline({ layout: 'auto',
+          vertex: { module: shader, entryPoint: 'vertex', buffers: [{ arrayStride: 8,
+            attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x2' }] }] },
+          fragment: { module: shader, entryPoint: 'fragment', targets: [{ format }] },
+          primitive: { topology: 'triangle-list' }, multisample: { count: 4 } }));
       }
-      @fragment fn fragment() -> @location(0) vec4f { return vec4f(${colour.join(',')}); }
-    ` });
-    r.pipeline = d.createRenderPipeline({ layout: 'auto',
-      vertex: { module: shader, entryPoint: 'vertex', buffers: [{ arrayStride: 8,
-        attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x2' }] }] },
-      fragment: { module: shader, entryPoint: 'fragment', targets: [{ format }] },
-      primitive: { topology: 'triangle-list' }, multisample: { count: 4 } });
+      return r.pipelines.get(colour);
+    };
     const blit = d.createShaderModule({ code: `
       @group(0) @binding(0) var image: texture_2d<f32>;
       @vertex fn v(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
@@ -269,7 +277,7 @@ class GPUrenderer {
     const encoder = this.device.createCommandEncoder(), pass = this.pass(encoder, true);
     pass.end(); this.present(encoder);
   }
-  draw(points, first = 0, width, live = false, predicted = [], revision = GEOMETRY_REVISION) {
+  draw(points, first = 0, width, live = false, predicted = [], revision = GEOMETRY_REVISION, colour = 0) {
     if (!points.length) return;
     const { chunks, clip } = prepare(this, points, first, width, live, predicted, revision), data = vertices(chunks);
     if (!clip[2] || !clip[3]) return;
@@ -285,7 +293,7 @@ class GPUrenderer {
     const encoder = d.createCommandEncoder(), pass = this.pass(encoder, false);
     pass.setScissorRect(...clip);
     if (live) { pass.setPipeline(this.erase); pass.draw(3); }
-    pass.setPipeline(this.pipeline); pass.setVertexBuffer(0, this.buffer);
+    pass.setPipeline(this.pipeline(colour)); pass.setVertexBuffer(0, this.buffer);
     pass.draw(data.length / 2); pass.end(); this.present(encoder);
   }
   dispose() {

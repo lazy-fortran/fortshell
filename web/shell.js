@@ -1,7 +1,7 @@
 import { PointerSurface } from 'fortui/surface';
 import { InkModel } from 'fortink/model';
 import { createRenderer, minimumDotRadius } from './renderers.js';
-import { InkShape, INK, GEOMETRY_REVISION, LEGACY_GEOMETRY } from './geometry.js';
+import { InkShape, inkColour, GEOMETRY_REVISION, LEGACY_GEOMETRY } from './geometry.js';
 import { NotebookStore } from './storage.js';
 import { openPDF, renderPDF, exportPDF } from './pdf.js';
 import { runBenchmark } from './benchmark.js';
@@ -127,8 +127,8 @@ function requestPageStrict() {
 }
 function coordinates(s) {
   const rect = $('paper').getBoundingClientRect(), [w, h] = pageSize();
-  return [Math.max(0, Math.min(w, (s.x - rect.left) / rect.width * w)),
-    Math.max(0, Math.min(h, (s.y - rect.top) / rect.height * h)), s.t,
+  // Ink beyond the page edge is clipped by the page, not pressed onto its border.
+  return [(s.x - rect.left) / rect.width * w, (s.y - rect.top) / rect.height * h, s.t,
     Math.max(0, Math.min(1, s.pressure ?? 0.5))];
 }
 function polygonPath(outline) {
@@ -179,7 +179,7 @@ function startStroke(e) {
     current = -1;
     return true;
   }
-  current = M._fs_begin(M._fs_width(0), 0, engine === 'wasm' ? 0 : engine === 'js' ? 1 : engine === 'perfect' ? 3 : 2);
+  current = M._fs_begin(M._fs_width(0), M._fs_colour(-1), engine === 'wasm' ? 0 : engine === 'js' ? 1 : engine === 'perfect' ? 3 : 2);
   if (!current) return false;
   strokeGeometry.set(current, GEOMETRY_REVISION);
   model.reset(); drawn = 0; predictions = [];
@@ -246,11 +246,11 @@ function drawPerfect(target, id, preview = []) {
   if (!c) throw new Error('The reference outline requires Canvas 2D');
   const { x, y, sx, sy } = target.raster;
   c.setTransform(sx, 0, 0, sy, -x, -y);
-  c.fillStyle = INK; c.fill(polygonPath(outline));
+  c.fillStyle = inkColour(M._fs_meta(id, 1)); c.fill(polygonPath(outline));
 }
 function drawStroke(target, id) {
   if (M._fs_meta(id, 2) === 3) drawPerfect(target, id);
-  else target.draw(points(id), 0, M._fs_meta(id, 0), false, [], geometry(id));
+  else target.draw(points(id), 0, M._fs_meta(id, 0), false, [], geometry(id), M._fs_meta(id, 1));
 }
 function drawActive() {
   frame = 0;
@@ -264,7 +264,7 @@ function drawActive() {
   }
   if (engine === 'perfect') { activeRenderer.clear(); drawPerfect(activeRenderer, current, preview); }
   else activeRenderer.draw(p, drawn, M._fs_meta(current, 0), true,
-    preview.map(([x, y]) => [x, y, p.at(-1)]), geometry(current));
+    preview.map(([x, y]) => [x, y, p.at(-1)]), geometry(current), M._fs_meta(current, 1));
   drawn = M._fs_size(current);
   if (profiler) profiler.submitted(started);
 }
@@ -278,7 +278,7 @@ function endStroke(cancelled) {
   const id = M._fs_finish(cancelled ? 1 : 0); current = 0;
   if (M._fs_visible(id)) {
     if (activeRenderer.commit && M._fs_meta(id, 2) !== 3)
-      activeRenderer.commit(committed, points(id), M._fs_meta(id, 0), drawn, geometry(id));
+      activeRenderer.commit(committed, points(id), M._fs_meta(id, 0), drawn, geometry(id), M._fs_meta(id, 1));
     else drawStroke(committed, id);
   }
   activeRenderer.clear();
@@ -446,6 +446,9 @@ async function boot() {
     imports = imports.then(() => importFile($('file').files[0])).catch(error);
   });
   $('title').addEventListener('input', metaChanged);
+  // The overflow menu closes after a choice or a press elsewhere.
+  $('more').addEventListener('click', e => { if (e.target.closest('.menu button')) $('more').open = false; });
+  document.addEventListener('pointerdown', e => { if (!e.target.closest('#more')) $('more').open = false; }, true);
   $('clear-page').onclick = () => {
     if (!ready || operation) return;
     if (current) endStroke(false);

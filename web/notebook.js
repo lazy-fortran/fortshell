@@ -1,4 +1,4 @@
-import { GEOMETRY_REVISION, LEGACY_GEOMETRY } from './geometry.js';
+import { GEOMETRY_REVISION, LEGACY_GEOMETRY, INK_COLOURS } from './geometry.js';
 
 export function validateSnapshot(s) {
   if (s.meta?.version !== 1 || !Array.isArray(s.meta.pages) || !s.meta.pages.length
@@ -10,6 +10,7 @@ export function validateSnapshot(s) {
         || !Number.isInteger(stroke.page) || stroke.page < 1 || stroke.page > s.meta.pages.length
         || !Number.isFinite(stroke.width) || stroke.width <= 0 || stroke.width > 100
         || ![0, 1, 2, 3].includes(stroke.engine)
+        || !(stroke.colour === undefined || (Number.isInteger(stroke.colour) && stroke.colour >= 0 && stroke.colour < INK_COLOURS.length))
         || ![undefined, LEGACY_GEOMETRY, GEOMETRY_REVISION].includes(stroke.geometry)) throw new Error('Invalid stroke');
     ids.set(stroke.id, []);
   }
