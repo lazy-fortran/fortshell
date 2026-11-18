@@ -145,8 +145,11 @@ export class InkShape {
       after = this.points[Math.min(this.points.length - 1, i + 1)];
     const outgoing = direction(p, after), a = direction(before, p) || outgoing || [1, 0], b = outgoing || a;
     const r = this.radius(i), alignment = dot(a, b);
-    if (alignment < 0.5) {
-      // Each leg meets the same round join without crossing the opposite edge.
+    const cross = a[0] * b[1] - a[1] * b[0];
+    const chordX = after[0] - before[0], chordY = after[1] - before[1];
+    const bend = 2 * r * cross;
+    if (alignment < 0.5 || bend * bend > chordX * chordX + chordY * chordY) {
+      // The inner offset folds when the bend radius is smaller than the brush.
       return { incoming: offset(p, -a[1] * r, a[0] * r), outgoing: offset(p, -b[1] * r, b[0] * r),
         incomingTangent: [a, a], outgoingTangent: [b, b], join: [p[0], p[1], r] };
     }

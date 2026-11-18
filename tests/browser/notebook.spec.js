@@ -614,6 +614,38 @@ test('finishing a long predicted stroke repaints only its tip', async ({ page })
   expect(result.curves).toBeLessThan(512);
 });
 
+test('ink fills a tight bend when the brush is wider than its radius', async ({ page }) => {
+  await open(page);
+  const covered = await page.evaluate(async () => {
+    const f = window.fortshell, M = f.module, brush = 0.55, bend = 0.45;
+    const points = [[102, 54], [103, 54], [104, 54]];
+    for (let i = 1; i <= 70; i++) {
+      const angle = 6 * i / 70;
+      points.push([104 + bend * Math.sin(angle), 54 + bend * (1 - Math.cos(angle))]);
+    }
+    const [x, y] = points.at(-1);
+    points.push([x + 0.4 * Math.cos(6), y + 0.4 * Math.sin(6)]);
+    M._fs_begin(2 * brush, 0, points.length);
+    M.HEAPF32.set(points.flatMap(([x, y], i) => [x, y, i / 240, 0.5]), M._fs_input() / 4);
+    M.HEAPF32.set(points.flatMap(([x, y]) => [x, y, brush]), M._fs_output() / 4);
+    M._fs_append(points.length); M._fs_finish(0);
+
+    const probes = points.slice(2, 5).map(([x, y]) => [x, y + 0.8 * brush]);
+    const ctx = document.createElement('canvas').getContext('2d'), hits = probes.map(() => false);
+    const prototype = CanvasRenderingContext2D.prototype, fill = prototype.fill;
+    prototype.fill = function (path, ...args) {
+      if (path instanceof Path2D) {
+        probes.forEach(([x, y], i) => { hits[i] ||= ctx.isPointInPath(path, x, y); });
+      }
+      return fill.call(this, path, ...args);
+    };
+    try { await f.requestPage(); }
+    finally { prototype.fill = fill; }
+    return hits;
+  });
+  expect(covered).toEqual([true, true, true]);
+});
+
 test('sparse vector PDF ink keeps its body width and tapered caps', async ({ page }) => {
   await open(page);
   await page.evaluate(async () => {
