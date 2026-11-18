@@ -1,7 +1,6 @@
 const TAU = 2 * Math.PI;
 export const INK = '#17212b';
 export const INK_CHUNK = 8;
-const mix = (a, b) => [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
 const direction = (a, b) => {
   const x = b[0] - a[0], y = b[1] - a[1], d = Math.hypot(x, y);
   return d > 1e-7 ? [x / d, y / d] : null;
@@ -30,6 +29,34 @@ function handle(before, at, after, along, length) {
   // A zero tangent at a sharp turn keeps the interpolant inside the corner.
   if (dot(a, b) < 0.5) return [0, 0];
   return [(a[0] + b[0]) * length / 2, (a[1] + b[1]) * length / 2];
+}
+
+function edgeTangent(before, at, after) {
+  const a = direction(before, at), b = direction(at, after);
+  if (!a || !b || dot(a, b) < 0) return [0, 0];
+  const x = a[0] + b[0], y = a[1] + b[1], length = Math.hypot(x, y);
+  return [x / length, y / length];
+}
+
+function edgeCurve(a, b, start, end) {
+  const length = Math.hypot(b[0] - a[0], b[1] - a[1]) / 3;
+  return [a, [a[0] + length * start[0], a[1] + length * start[1]],
+    [b[0] - length * end[0], b[1] - length * end[1]], b];
+}
+
+function offset(p, x, y) {
+  return [[p[0] + x, p[1] + y], [p[0] - x, p[1] - y]];
+}
+
+function cubicAt([a, b, c, d], t) {
+  const s = 1 - t, ab = 3 * s * s * t, bc = 3 * s * t * t;
+  return [s ** 3 * a[0] + ab * b[0] + bc * c[0] + t ** 3 * d[0],
+    s ** 3 * a[1] + ab * b[1] + bc * c[1] + t ** 3 * d[1]];
+}
+
+function curvatureBound([a, b, c, d]) {
+  return Math.max(Math.hypot(a[0] - 2 * b[0] + c[0], a[1] - 2 * b[1] + c[1]),
+    Math.hypot(b[0] - 2 * c[0] + d[0], b[1] - 2 * c[1] + d[1]));
 }
 
 // Distance, rather than time spent pressing, controls brush width transitions.
@@ -116,64 +143,81 @@ export class InkShape {
   edge(i) {
     const p = this.points[i], before = this.points[Math.max(0, i - 1)],
       after = this.points[Math.min(this.points.length - 1, i + 1)];
-    const unit = (a, b) => {
-      const d = Math.hypot(b[0] - a[0], b[1] - a[1]);
-      return d ? [(b[0] - a[0]) / d, (b[1] - a[1]) / d] : null;
-    };
-    const a = unit(before, p) || unit(p, after) || [1, 0], b = unit(p, after) || a;
-    const nx = -a[1] - b[1], ny = a[0] + b[0], length = Math.hypot(nx, ny);
-    const r = this.radius(i), miter = Math.min(1.5, 2 / Math.max(1e-6, length));
-    const ox = length > 1e-6 ? nx / length * r * miter : -a[1] * r;
-    const oy = length > 1e-6 ? ny / length * r * miter : a[0] * r;
-    return [[p[0] + ox, p[1] + oy], [p[0] - ox, p[1] - oy]];
-  }
-  patch(i) {
-    const edge = this.edge(i), previous = i ? this.edge(i - 1) : edge,
-      next = i + 1 < this.points.length ? this.edge(i + 1) : edge;
-    return [mix(previous[0], edge[0]), edge[0], mix(edge[0], next[0]),
-      mix(previous[1], edge[1]), edge[1], mix(edge[1], next[1])];
-  }
-  bounds(first, end) {
-    const box = [Infinity, Infinity, -Infinity, -Infinity];
-    for (let i = Math.max(0, first - 1); i < Math.min(this.points.length, end + 1); i++) {
-      const [x, y, r] = this.points[i];
-      box[0] = Math.min(box[0], x - 2 * r); box[1] = Math.min(box[1], y - 2 * r);
-      box[2] = Math.max(box[2], x + 2 * r); box[3] = Math.max(box[3], y + 2 * r);
+    const outgoing = direction(p, after), a = direction(before, p) || outgoing || [1, 0], b = outgoing || a;
+    const r = this.radius(i), alignment = dot(a, b);
+    if (alignment < 0.5) {
+      // Each leg meets the same round join without crossing the opposite edge.
+      return { incoming: offset(p, -a[1] * r, a[0] * r), outgoing: offset(p, -b[1] * r, b[0] * r),
+        incomingTangent: [a, a], outgoingTangent: [b, b], join: [p[0], p[1], r] };
     }
+    const edge = offset(p, (-a[1] - b[1]) * r / (1 + alignment), (a[0] + b[0]) * r / (1 + alignment));
+    const endTangent = i === 0 || i === this.points.length - 1 ? [a, a] : null;
+    return { incoming: edge, outgoing: edge, incomingTangent: endTangent, outgoingTangent: endTangent };
+  }
+  outline(first = 0, end = this.points.length) {
+    const last = this.points.length - 1, curves = [], caps = [];
+    if (first === 0 && last >= 0) caps.push([...this.points[0].slice(0, 2), this.radius(0)]);
+    if (last > 0 && end > last) caps.push([...this.points[last].slice(0, 2), this.radius(last)]);
+    const stop = Math.min(end, last);
+    if (first >= stop) return { curves, caps };
+
+    const start = Math.max(0, first - 1), edges = [];
+    for (let i = start; i <= Math.min(last, stop + 1); i++) edges.push(this.edge(i));
+    const tangents = (index, edge) => {
+      const before = edges[index - 1].outgoing, after = edges[index + 1].incoming;
+      return [edgeTangent(before[0], edge[0], after[0]), edgeTangent(before[1], edge[1], after[1])];
+    };
+    const initial = edges[first - start];
+    let a = initial.outgoing, ta = initial.outgoingTangent || tangents(first - start, a);
+    for (let i = first; i < stop; i++) {
+      const join = edges[i - start].join;
+      if (join) caps.push(join);
+      const next = edges[i + 1 - start], b = next.incoming;
+      const tb = next.incomingTangent || tangents(i + 1 - start, b);
+      curves.push([edgeCurve(a[0], b[0], ta[0], tb[0]), edgeCurve(a[1], b[1], ta[1], tb[1])]);
+      a = next.outgoing;
+      ta = next.outgoingTangent || tb;
+    }
+    return { curves, caps };
+  }
+  bounds({ curves, caps }) {
+    const box = [Infinity, Infinity, -Infinity, -Infinity];
+    const include = (x, y, r = 0) => {
+      box[0] = Math.min(box[0], x - r); box[1] = Math.min(box[1], y - r);
+      box[2] = Math.max(box[2], x + r); box[3] = Math.max(box[3], y + r);
+    };
+    for (const pair of curves) for (const curve of pair) for (const p of curve) include(...p);
+    for (const cap of caps) include(...cap);
     return box;
   }
-  path(ctx, first = 0, end = this.points.length) {
-    for (let i = first; i < end; i++) {
-      const [a, b, c, d, e, f] = this.patch(i);
-      ctx.moveTo(...d); ctx.quadraticCurveTo(...e, ...f);
-      ctx.lineTo(...c); ctx.quadraticCurveTo(...b, ...a); ctx.closePath();
-      if (i === 0 || i === this.points.length - 1) {
-        const [x, y] = this.points[i], r = this.radius(i);
-        ctx.moveTo(x + r, y); ctx.arc(x, y, r, 0, TAU); ctx.closePath();
-      }
+  path(ctx, { curves, caps } = this.outline()) {
+    for (const [[a, b, c, d], [e, f, g, h]] of curves) {
+      ctx.moveTo(...e); ctx.bezierCurveTo(...f, ...g, ...h);
+      ctx.lineTo(...d); ctx.bezierCurveTo(...c, ...b, ...a); ctx.closePath();
+    }
+    for (const [x, y, r] of caps) {
+      ctx.moveTo(x + r, y); ctx.arc(x, y, r, 0, TAU); ctx.closePath();
     }
   }
   mesh(first = 0, end = this.points.length, scale = 1) {
-    const values = [], at = (a, b, c, t) => [
-      (1 - t) ** 2 * a[0] + 2 * (1 - t) * t * b[0] + t * t * c[0],
-      (1 - t) ** 2 * a[1] + 2 * (1 - t) * t * b[1] + t * t * c[1]];
-    for (let i = first; i < end; i++) {
-      const [a, b, c, d, e, f] = this.patch(i);
-      const error = Math.max(Math.hypot(a[0] - 2 * b[0] + c[0], a[1] - 2 * b[1] + c[1]),
-        Math.hypot(d[0] - 2 * e[0] + f[0], d[1] - 2 * e[1] + f[1]));
-      const steps = Math.max(1, Math.min(64, Math.ceil(Math.sqrt(error * scale / 0.4))));
-      let left = a, right = d;
+    return this.meshOutline(this.outline(first, end), scale);
+  }
+  meshOutline({ curves, caps }, scale) {
+    const values = [];
+    for (const [leftCurve, rightCurve] of curves) {
+      const error = Math.max(curvatureBound(leftCurve), curvatureBound(rightCurve));
+      const steps = Math.max(1, Math.min(64, Math.ceil(Math.sqrt(error * scale / 0.1))));
+      let left = leftCurve[0], right = rightCurve[0];
       for (let j = 1; j <= steps; j++) {
-        const l = at(a, b, c, j / steps), r = at(d, e, f, j / steps);
+        const l = cubicAt(leftCurve, j / steps), r = cubicAt(rightCurve, j / steps);
         values.push(...left, ...right, ...l, ...l, ...right, ...r); left = l; right = r;
       }
-      if (i === 0 || i === this.points.length - 1) {
-        const [x, y] = this.points[i], r = this.radius(i);
-        const sides = Math.max(16, Math.min(128, Math.ceil(Math.PI / Math.acos(Math.max(-1, 1 - 0.1 / (r * scale))))));
-        for (let j = 0; j < sides; j++) {
-          const a = TAU * j / sides, b = TAU * (j + 1) / sides;
-          values.push(x, y, x + r * Math.cos(a), y + r * Math.sin(a), x + r * Math.cos(b), y + r * Math.sin(b));
-        }
+    }
+    for (const [x, y, r] of caps) {
+      const sides = Math.max(16, Math.min(128, Math.ceil(Math.PI / Math.acos(Math.max(-1, 1 - 0.1 / (r * scale))))));
+      for (let j = 0; j < sides; j++) {
+        const a = TAU * j / sides, b = TAU * (j + 1) / sides;
+        values.push(x, y, x + r * Math.cos(a), y + r * Math.sin(a), x + r * Math.cos(b), y + r * Math.sin(b));
       }
     }
     return new Float32Array(values);

@@ -52,7 +52,7 @@ export function svgInk(input, width) {
   shape.path({
     moveTo: (...p) => { path += `M${xy(p)}`; },
     lineTo: (...p) => { path += `L${xy(p)}`; },
-    quadraticCurveTo: (...p) => { path += `Q${xy(p)}`; },
+    bezierCurveTo: (...p) => { path += `C${xy(p)}`; },
     closePath: () => { path += 'Z'; },
     arc: (x, y, r) => {
       const k = r * 0.5522847498;

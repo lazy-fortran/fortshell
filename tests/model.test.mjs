@@ -83,6 +83,36 @@ test('sparse curves recover the arc without moving its endpoints', () => {
   assert.deepEqual(shape.mesh(), original);
 });
 
+test('the outside of a sparse circular stroke follows its geometric radius', () => {
+  const radius = 6, brush = 0.75, shape = new InkShape();
+  shape.update(Float32Array.from(Array.from({ length: 9 }, (_, i) => {
+    const angle = i * Math.PI / 16;
+    return [radius * Math.cos(angle), radius * Math.sin(angle), brush];
+  }).flat()), 0, 2 * brush);
+  let start, error = 0, count = 0;
+  const measure = (...coordinates) => {
+    const controls = [start];
+    for (let i = 0; i < coordinates.length; i += 2) controls.push(coordinates.slice(i, i + 2));
+    start = controls.at(-1);
+    for (let sample = 0; sample <= 16; sample++) {
+      const t = sample / 16;
+      let points = controls;
+      while (points.length > 1) points = points.slice(1).map(([x, y], i) =>
+        [(1 - t) * points[i][0] + t * x, (1 - t) * points[i][1] + t * y]);
+      const [x, y] = points[0], angle = Math.atan2(y, x), distance = Math.hypot(x, y);
+      if (angle > 0.3 && angle < Math.PI / 2 - 0.3 && distance > radius) {
+        error = Math.max(error, Math.abs(distance - radius - brush));
+        count++;
+      }
+    }
+  };
+  const move = (x, y) => { start = [x, y]; };
+  shape.path({ moveTo: move, lineTo: move, quadraticCurveTo: measure, bezierCurveTo: measure,
+    closePath() {}, arc() {} });
+  assert.ok(count > 0);
+  assert.ok(error < 0.005, `Maximum outside error ${error} mm`);
+});
+
 test('replacing a forecast restores measured geometry across chunk boundaries', () => {
   const input = new Float32Array(130 * 3);
   for (let i = 0; i < 130; i++) input.set([i, Math.sin(i / 10), 0.5], i * 3);

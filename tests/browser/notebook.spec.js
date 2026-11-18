@@ -586,8 +586,8 @@ test('finishing a long predicted stroke repaints only its tip', async ({ page })
     const canvas = document.getElementById('active'), box = canvas.getBoundingClientRect();
     canvas.setPointerCapture = () => {}; canvas.hasPointerCapture = () => false;
     let curves = 0;
-    const curve = Path2D.prototype.quadraticCurveTo;
-    Path2D.prototype.quadraticCurveTo = function (...args) { curves++; return curve.apply(this, args); };
+    const curve = Path2D.prototype.bezierCurveTo;
+    Path2D.prototype.bezierCurveTo = function (...args) { curves++; return curve.apply(this, args); };
     const send = (type, i) => {
       const x = 20 + i * 0.18, y = 105 + 20 * Math.sin(i / 80);
       const e = new PointerEvent(type, { bubbles: true, cancelable: true, pointerType: 'pen',
@@ -608,7 +608,7 @@ test('finishing a long predicted stroke repaints only its tip', async ({ page })
       document.getElementById('clear-page').click();
       return { curves, samples: window.fortshell.module._fs_size(1),
         visible: window.fortshell.snapshot().strokes.some(s => s.visible) };
-    } finally { Path2D.prototype.quadraticCurveTo = curve; }
+    } finally { Path2D.prototype.bezierCurveTo = curve; }
   });
   expect(result.samples).toBe(1201); expect(result.visible).toBe(false);
   expect(result.curves).toBeLessThan(512);

@@ -21,6 +21,10 @@ function pixelBounds(bounds, { x, y, sx, sy }, canvas) {
   return [left, top, Math.max(0, right - left), Math.max(0, bottom - top)];
 }
 
+function pageBounds([left, top, width, height], { x, y, sx, sy }) {
+  return [(left + x) / sx, (top + y) / sy, (left + x + width) / sx, (top + y + height) / sy];
+}
+
 function prepare(renderer, points, first, width, live, predicted) {
   // Bound Canvas tip work without fragmenting mesh uploads.
   const chunkSize = live && renderer.ctx ? INK_CHUNK : 64;
@@ -33,14 +37,15 @@ function prepare(renderer, points, first, width, live, predicted) {
   for (let i = from; i < oldChunks.length; i++) bounds = union(bounds, oldChunks[i].bounds);
   for (let i = from; i * chunkSize < shape.points.length; i++) {
     const start = i * chunkSize, end = Math.min(start + chunkSize, shape.points.length);
-    const chunk = { bounds: shape.bounds(start, end) };
-    if (renderer.ctx) { chunk.path = new Path2D(); shape.path(chunk.path, start, end); }
-    else chunk.mesh = shape.mesh(start, end, Math.max(view.sx, view.sy));
+    const outline = shape.outline(start, end), chunk = { bounds: shape.bounds(outline) };
+    if (renderer.ctx) { chunk.path = new Path2D(); shape.path(chunk.path, outline); }
+    else chunk.mesh = shape.meshOutline(outline, Math.max(view.sx, view.sy));
     shape.chunks[i] = chunk; bounds = union(bounds, chunk.bounds);
   }
   shape.chunks.length = Math.ceil(shape.points.length / chunkSize);
   const clip = pixelBounds(bounds, view, canvas);
-  const chunks = shape.chunks.filter(c => intersects(c.bounds, bounds));
+  const dirty = pageBounds(clip, view);
+  const chunks = shape.chunks.filter(c => intersects(c.bounds, dirty));
   return { chunks, clip };
 }
 function vertices(chunks) {
@@ -97,7 +102,7 @@ class CanvasRenderer {
       const h = Math.min(COVERAGE_TILE, top + height - row);
       for (let column = left; column < left + width; column += COVERAGE_TILE) {
         const w = Math.min(COVERAGE_TILE, left + width - column);
-        const bounds = [(column + x) / sx, (row + y) / sy, (column + x + w) / sx, (row + y + h) / sy];
+        const bounds = pageBounds([column, row, w, h], this.raster);
         const path = new Path2D();
         let visible = false;
         for (const chunk of chunks) if (intersects(chunk.bounds, bounds)) {

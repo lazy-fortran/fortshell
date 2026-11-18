@@ -71,10 +71,9 @@ content and adds vector ink. The app imports one working notebook at a time.
 
 **Compare** offers the same model in JavaScript and Fortran WebAssembly,
 raw input, and the independent perfect-freehand outline as a Canvas 2D
-reference. Canvas 2D, WebGL2, and WebGPU render the same quadratic outline
-with gently tapered round caps. The outline follows a lightly stabilized
-centreline with cubic interpolation across sparse samples and preserved
-endpoints and sharp turns.
+reference. Canvas 2D, WebGL2, and WebGPU share cubic stroke outlines with
+tapered round caps and round joins at sharp turns. The outline follows a
+lightly stabilized centreline with cubic interpolation across sparse samples.
 An unsupported explicitly selected renderer reports an error. Device loss
 reports a switch to Canvas 2D with retained document data.
 
