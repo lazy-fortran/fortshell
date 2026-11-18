@@ -1,6 +1,6 @@
 import { InkShape, INK_CHUNK, INK } from './geometry.js';
 
-const colour = [23 / 255, 33 / 255, 43 / 255, 1];
+const colour = [0, 0, 0, 1];
 export async function createRenderer(canvas, backend, width, height, view) {
   if (backend === 'canvas') return new CanvasRenderer(canvas, width, height, view);
   if (backend === 'webgl') return new GLRenderer(canvas, width, height);

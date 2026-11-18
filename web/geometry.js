@@ -1,25 +1,70 @@
 const TAU = 2 * Math.PI;
-export const INK = '#17212b';
+export const INK = '#000';
 export const INK_CHUNK = 8;
+const LOOKAHEAD = 2;
 const direction = (a, b) => {
   const x = b[0] - a[0], y = b[1] - a[1], d = Math.hypot(x, y);
   return d > 1e-7 ? [x / d, y / d] : null;
 };
 const dot = (a, b) => a[0] * b[0] + a[1] * b[1];
 
+function transverseFit(points, axis, origin) {
+  const x = [], y = [];
+  for (const p of points) {
+    const dx = p[0] - origin[0], dy = p[1] - origin[1];
+    x.push(dx * axis[0] + dy * axis[1]);
+    y.push(dy * axis[0] - dx * axis[1]);
+  }
+  // Clustered events and reversals make the local interpolant ill-conditioned.
+  const spacing = [x[1] - x[0], -x[1], x[2], x[3] - x[2]];
+  if (Math.min(...spacing) < Math.max(...spacing) / 4) return null;
+
+  // Keep constant curvature exact when the two outer samples agree on it.
+  // The sagitta formula avoids subtracting two large radii near a straight line.
+  const mid = (x[1] + x[2]) / 2, half = (x[2] - x[1]) / 2;
+  const chordY = (y[1] + y[2]) / 2;
+  const sagitta = i => {
+    const rise = y[i] - chordY;
+    if (Math.abs(rise) < 1e-9) return 0;
+    const run = x[i] - mid;
+    const center = (run * run - half * half + rise * rise) / (2 * rise);
+    return x[1] * x[2] / (center + Math.sign(center) * Math.hypot(center, Math.sqrt(-x[1] * x[2])));
+  };
+  const left = sagitta(0), right = sagitta(3);
+  if (Math.abs(left - right) < Math.max(0.003, 0.1 * Math.abs(left + right)))
+    return chordY + (left + right) / 2;
+  let offset = 0;
+  for (let i = 0; i < x.length; i++) {
+    let weight = 1;
+    for (let j = 0; j < x.length; j++) if (j !== i) weight *= -x[j] / (x[i] - x[j]);
+    offset += weight * y[i];
+  }
+  return offset;
+}
+
 function station(input, i) {
   const p = [input[i], input[i + 1], input[i + 2]];
   if (i === 0 || i + 3 === input.length) return p;
   const a = [input[i - 3], input[i - 2]], b = [input[i + 3], input[i + 4]];
   const dx = b[0] - a[0], dy = b[1] - a[1], span = Math.hypot(dx, dy);
-  if (span > 1.5) return p;
   const incoming = direction(a, p), outgoing = direction(p, b);
-  if (!incoming || !outgoing || dot(incoming, outgoing) < 0.5) return p;
-  // Limit the correction in page units so a small letter keeps its shape.
-  const offset = ((p[0] - a[0]) * dy - (p[1] - a[1]) * dx) / span;
-  const correction = Math.max(-0.12, Math.min(0.12, offset * 0.45));
-  p[0] -= correction * dy / span;
-  p[1] += correction * dx / span;
+  if (!incoming || !outgoing || dot(incoming, outgoing) < 0.7) return p;
+  const axis = [dx / span, dy / span];
+  let fit = null;
+  if (i >= 6 && i + 6 < input.length) {
+    const before = [input[i - 6], input[i - 5]], after = [input[i + 6], input[i + 7]];
+    const entry = direction(before, a), exit = direction(b, after);
+    if (entry && exit && dot(entry, incoming) >= 0.7 && dot(outgoing, exit) >= 0.7)
+      fit = transverseFit([before, a, b, after], axis, p);
+  }
+  // A cubic fit retains low-frequency curvature while damping sample-to-sample bends.
+  // The short fallback works next to endpoints or when a sample cluster cannot be fitted.
+  const chordOffset = (p[0] - a[0]) * axis[1] - (p[1] - a[1]) * axis[0];
+  const offset = fit === null ? (span <= 1.5 ? 0.45 * chordOffset : 0) : 0.375 * fit;
+  const limit = Math.min(0.35, 0.12 * span);
+  const correction = Math.max(-limit, Math.min(limit, offset));
+  p[0] -= correction * axis[1];
+  p[1] += correction * axis[0];
   return p;
 }
 
@@ -66,8 +111,8 @@ export class InkShape {
   }
   update(input, first = 0, width = input[2] * 2, predicted = []) {
     const oldLength = this.distance.at(-1) || 0;
-    // A new measured sample can change the two preceding segments.
-    first = Math.max(0, first - 2);
+    // This segment also uses the following fitted station for its end tangent.
+    first = Math.max(0, first - LOOKAHEAD - 1);
     if (first < this.ends.length) {
       this.points.length = first ? this.ends[first - 1] : 0;
       this.distance.length = this.points.length;

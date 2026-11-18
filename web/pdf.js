@@ -87,7 +87,7 @@ export async function exportPDF(snapshot, strokes) {
       if (!stroke.visible || stroke.page !== i + 1 || !stroke.points.length) continue;
       const path = stroke.engine === 3 ? outlinePath(perfectOutline(stroke.raw, stroke.width)) : svgInk(stroke.points, stroke.width);
       page.drawSvgPath(path, { x: 0, y: 0, scale: MM,
-        color: rgb(23 / 255, 33 / 255, 43 / 255), borderWidth: 0 });
+        color: rgb(0, 0, 0), borderWidth: 0 });
     }
     page.pushOperators(popGraphicsState());
   }

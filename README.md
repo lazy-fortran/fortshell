@@ -10,8 +10,9 @@ annotate a PDF, or export a vector PDF and an editable `.fortshell` notebook.
 Undo, redo, stroke erasing, pressure, zoom, and immediate keyboard command
 entry are available. Pens and mice write. Touches on the page are ignored
 to prevent palm gestures. Use the page and zoom controls for navigation.
-The default pen is 1.5 mm, with a minimum rendered width of 70 percent to
-keep light contact visible. Raw pressure is retained in the notebook.
+The default black pen is 1.5 mm. Before tapering, pressure sets the width
+between 18 and 100 percent of the selected size. An isolated tap has a
+minimum raster radius of one display pixel. The notebook retains raw pressure.
 
 The longer-term application is a unified AI-native shell for terminals,
 browsers, tablets, desktops, and phones. This first slice has no AI service or
@@ -72,8 +73,8 @@ content and adds vector ink. The app imports one working notebook at a time.
 **Compare** offers the same model in JavaScript and Fortran WebAssembly,
 raw input, and the independent perfect-freehand outline as a Canvas 2D
 reference. Canvas 2D, WebGL2, and WebGPU share cubic stroke outlines with
-tapered round caps and round joins at sharp turns. The outline follows a
-lightly stabilized centreline with cubic interpolation across sparse samples.
+tapered round caps and round joins at sharp turns. A local curve fit reduces
+transverse jitter in the centreline while preserving deliberate corners.
 An unsupported explicitly selected renderer reports an error. Device loss
 reports a switch to Canvas 2D with retained document data.
 

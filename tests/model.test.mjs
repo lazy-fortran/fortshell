@@ -83,6 +83,20 @@ test('sparse curves recover the arc without moving its endpoints', () => {
   assert.deepEqual(shape.mesh(), original);
 });
 
+test('sparse handwriting smooths transverse jitter through inflections', () => {
+  const curve = x => 4 * Math.sin(x * 0.066) + 2.5 * Math.sin(x * 0.14);
+  const shape = new InkShape();
+  const input = Float32Array.from(Array.from({ length: 32 }, (_, i) => {
+    const x = 3.4 * (i + 0.1 * Math.sin(i * 2));
+    const noise = 0.19 * (0.55 * Math.sin(i * 2.9) + 0.45 * Math.sin(i * 1.6));
+    return [x, curve(x) + noise, 0.48];
+  }).flat());
+  shape.update(input, 0, 1.5);
+  const middle = shape.points.slice(shape.ends[2], shape.ends.at(-3));
+  const rms = Math.sqrt(middle.reduce((sum, [x, y]) => sum + (y - curve(x)) ** 2, 0) / middle.length);
+  assert.ok(rms < 0.05, `RMS deviation from the underlying curve: ${rms} mm`);
+});
+
 test('the outside of a sparse circular stroke follows its geometric radius', () => {
   const radius = 6, brush = 0.75, shape = new InkShape();
   shape.update(Float32Array.from(Array.from({ length: 9 }, (_, i) => {
