@@ -1,4 +1,4 @@
-import { InkShape, INK_CHUNK, INK } from './geometry.js';
+import { InkShape, INK_CHUNK, INK, GEOMETRY_REVISION } from './geometry.js';
 
 const colour = [0, 0, 0, 1];
 export async function createRenderer(canvas, backend, width, height, view) {
@@ -25,24 +25,30 @@ function pageBounds([left, top, width, height], { x, y, sx, sy }) {
   return [(left + x) / sx, (top + y) / sy, (left + x + width) / sx, (top + y + height) / sy];
 }
 
-function prepare(renderer, points, first, width, live, predicted) {
+function raster(renderer) {
+  const { canvas } = renderer;
+  return renderer.raster || { x: 0, y: 0, sx: canvas.width / renderer.width, sy: canvas.height / renderer.height };
+}
+
+export function minimumDotRadius(renderer) {
+  const { sx, sy } = raster(renderer);
+  return 1 / Math.min(sx, sy);
+}
+
+function prepare(renderer, points, first, width, live, predicted, revision) {
   // Bound Canvas tip work without fragmenting mesh uploads.
   const chunkSize = live && renderer.ctx ? INK_CHUNK : 64;
-  const shape = live ? (renderer.shape ||= new InkShape(chunkSize)) : new InkShape(chunkSize);
+  const shape = live ? (renderer.shape ||= new InkShape(chunkSize, revision)) : new InkShape(chunkSize, revision);
   const oldChunks = shape.chunks;
   const { canvas } = renderer;
-  const view = renderer.raster || { x: 0, y: 0, sx: canvas.width / renderer.width, sy: canvas.height / renderer.height };
+  const view = raster(renderer);
+  const dot = minimumDotRadius(renderer);
   const from = shape.update(points, first, width, predicted);
   let bounds = [Infinity, Infinity, -Infinity, -Infinity];
   for (let i = from; i < oldChunks.length; i++) bounds = union(bounds, oldChunks[i].bounds);
   for (let i = from; i * chunkSize < shape.points.length; i++) {
     const start = i * chunkSize, end = Math.min(start + chunkSize, shape.points.length);
-    const outline = shape.outline(start, end);
-    // Keep an isolated tap legible even when it lands between display pixels.
-    if (shape.points.length === 1) {
-      const dot = outline.caps[0];
-      dot[2] = Math.max(dot[2], 1 / Math.min(view.sx, view.sy));
-    }
+    const outline = shape.outline(start, end, dot);
     const chunk = { bounds: shape.bounds(outline) };
     if (renderer.ctx) { chunk.path = new Path2D(); shape.path(chunk.path, outline); }
     else chunk.mesh = shape.meshOutline(outline, Math.max(view.sx, view.sy));
@@ -88,9 +94,9 @@ class CanvasRenderer {
     const c = this.ctx;
     c.setTransform(1, 0, 0, 1, 0, 0); c.clearRect(0, 0, this.canvas.width, this.canvas.height);
   }
-  draw(points, first = 0, width, live = false, predicted = []) {
+  draw(points, first = 0, width, live = false, predicted = [], revision = GEOMETRY_REVISION) {
     if (!points.length) return;
-    const { chunks, clip } = prepare(this, points, first, width, live, predicted);
+    const { chunks, clip } = prepare(this, points, first, width, live, predicted, revision);
     this.paint(chunks, clip, live);
   }
   paint(chunks, [left, top, width, height], live) {
@@ -124,10 +130,10 @@ class CanvasRenderer {
       }
     }
   }
-  commit(target, points, width, drawn) {
+  commit(target, points, width, drawn, revision) {
     const tip = this.shape?.points.at(-1), at = points.length - 3;
     if (this.shape?.predicted || drawn !== points.length / 3 || !tip || tip[0] !== points[at] || tip[1] !== points[at + 1])
-      this.draw(points, this.shape ? Math.min(drawn, points.length / 3 - 1) : 0, width, true);
+      this.draw(points, this.shape ? Math.min(drawn, points.length / 3 - 1) : 0, width, true, [], revision);
     // Preserve the live coverage at lift-off instead of rasterizing it a second time.
     target.ctx.setTransform(1, 0, 0, 1, 0, 0);
     target.ctx.drawImage(this.canvas, 0, 0);
@@ -170,9 +176,9 @@ class GLRenderer {
     gl.viewport(0, 0, canvas.width, canvas.height); this.clear();
   }
   clear() { this.shape = null; this.gl.disable(this.gl.SCISSOR_TEST); this.gl.clearColor(0, 0, 0, 0); this.gl.clear(this.gl.COLOR_BUFFER_BIT); }
-  draw(points, first = 0, width, live = false, predicted = []) {
+  draw(points, first = 0, width, live = false, predicted = [], revision = GEOMETRY_REVISION) {
     if (!points.length) return;
-    const { chunks, clip } = prepare(this, points, first, width, live, predicted);
+    const { chunks, clip } = prepare(this, points, first, width, live, predicted, revision);
     const gl = this.gl, data = vertices(chunks);
     if (!data.length || !clip[2] || !clip[3]) return;
     gl.enable(gl.SCISSOR_TEST); gl.scissor(clip[0], this.canvas.height - clip[1] - clip[3], clip[2], clip[3]);
@@ -263,9 +269,9 @@ class GPUrenderer {
     const encoder = this.device.createCommandEncoder(), pass = this.pass(encoder, true);
     pass.end(); this.present(encoder);
   }
-  draw(points, first = 0, width, live = false, predicted = []) {
+  draw(points, first = 0, width, live = false, predicted = [], revision = GEOMETRY_REVISION) {
     if (!points.length) return;
-    const { chunks, clip } = prepare(this, points, first, width, live, predicted), data = vertices(chunks);
+    const { chunks, clip } = prepare(this, points, first, width, live, predicted, revision), data = vertices(chunks);
     if (!clip[2] || !clip[3]) return;
     if (!data.length) return;
     const d = this.device;

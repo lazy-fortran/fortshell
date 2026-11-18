@@ -358,6 +358,35 @@ test('invalid import preserves ink and a failed save remains retryable', async (
   expect(await darkPixels(page)).toBeGreaterThan(100);
 });
 
+test('legacy and new stroke geometry survive backup, import and reload', async ({ page }) => {
+  await open(page);
+  const old = { meta: { version: 1, pages: [[297, 210]], current: 1 },
+    strokes: [{ id: 1, page: 1, width: 1.5, engine: 2, visible: true }],
+    chunks: [{ key: [1, 0], data: [50, 70, 0, 1, 58, 74, 0.01, 1, 60, 74.4, 0.02, 1, 65, 74, 0.03, 1] }] };
+  const importNotebook = async buffer => {
+    const revision = await page.evaluate(() => window.fortshell.pageRevision);
+    await page.locator('#file').setInputFiles({ name: 'strokes.fortshell', mimeType: 'application/json', buffer });
+    await page.waitForFunction(r => window.fortshell.pageRevision > r && !window.fortshell.busy, revision);
+    await expect(page.locator('#error')).toBeHidden();
+  };
+  await importNotebook(Buffer.from(JSON.stringify(old)));
+  const livePage = await page.locator('#active').boundingBox();
+  await page.mouse.move(livePage.x + livePage.width * 0.55, livePage.y + livePage.height * 0.5);
+  await page.mouse.down();
+  await page.mouse.move(livePage.x + livePage.width * 0.72, livePage.y + livePage.height * 0.63, { steps: 12 });
+  await page.mouse.up();
+  const [file] = await Promise.all([page.waitForEvent('download'), page.locator('[data-id=backup]').click()]);
+  const buffer = await readFile(await file.path()), exported = JSON.parse(buffer);
+  expect(exported.strokes.map(s => s.geometry)).toEqual([1, 2]);
+  expect(exported.chunks[0].data).toEqual(old.chunks[0].data.map(Math.fround));
+  await importNotebook(buffer);
+  const raster = () => page.evaluate(() => document.querySelector('#committed').toDataURL());
+  const before = await raster();
+  await page.reload(); await open(page);
+  expect(await page.evaluate(() => window.fortshell.snapshot().strokes.map(s => s.geometry))).toEqual([1, 2]);
+  expect(await raster()).toBe(before);
+});
+
 test('a long stroke checkpoints its tail and recovers after interruption', async ({ page }) => {
   await open(page);
   const b = await page.locator('#active').boundingBox();
@@ -474,6 +503,30 @@ test('reference ink survives reload, erasure and undo', async ({ page }) => {
   await expect.poll(() => darkPixels(page)).toBe(0);
   await page.locator('[data-id=undo]').click();
   await expect.poll(() => darkPixels(page)).toBeGreaterThan(100);
+});
+
+test('eraser follows the visible arc between sparse pen samples', async ({ page }) => {
+  await open(page);
+  const probes = await page.evaluate(async () => {
+    const center = 80, radius = 55, raw = Float32Array.from(Array.from({ length: 5 }, (_, i) =>
+      [center + radius * Math.cos(i * Math.PI / 4), center + radius * Math.sin(i * Math.PI / 4), i / 16, 1]).flat());
+    await window.fortshell.restore({ meta: { version: 1, pages: [[297, 210]], current: 1 },
+      strokes: [{ id: 1, page: 1, width: 1.5, engine: 2, visible: true }], chunks: [{ key: [1, 0], data: raw }] });
+    const c = document.querySelector('#committed'), box = c.getBoundingClientRect();
+    const outer = [center + radius * Math.cos(Math.PI / 8), center + radius * Math.sin(Math.PI / 8)];
+    const chord = outer.map(value => center + (value - center) * Math.cos(Math.PI / 8));
+    const px = ([x, y]) => [box.left + x / 297 * box.width, box.top + y / 210 * box.height];
+    const alpha = ([x, y]) => c.getContext('2d').getImageData(Math.floor(x / 297 * c.width),
+      Math.floor(y / 210 * c.height), 1, 1).data[3];
+    return { ink: px(outer), blank: px(chord), inkAlpha: alpha(outer), blankAlpha: alpha(chord) };
+  });
+  expect(probes.inkAlpha).toBeGreaterThan(0);
+  expect(probes.blankAlpha).toBe(0);
+  await page.locator('[data-id=eraser]').click();
+  await page.mouse.click(...probes.blank);
+  expect(await page.evaluate(() => window.fortshell.module._fs_visible(1))).toBe(1);
+  await page.mouse.click(...probes.ink);
+  expect(await page.evaluate(() => window.fortshell.module._fs_visible(1))).toBe(0);
 });
 
 for (const renderer of ['webgl', 'webgpu']) test(`${renderer} draws, resizes, and preserves ink`, async ({ page }, info) => {
@@ -595,7 +648,7 @@ test('finishing a long predicted stroke repaints only its tip', async ({ page })
         pointerId: 99, button: 0, buttons: type === 'pointerup' ? 0 : 1,
         clientX: box.left + x / 297 * box.width, clientY: box.top + y / 210 * box.height, pressure: 0.5 });
       Object.defineProperty(e, 'timeStamp', { value: 1000 + i * 4 });
-      Object.defineProperty(e, 'getPredictedEvents', { value: () => [8, 16].map(dt => ({
+      if (type === 'pointermove') Object.defineProperty(e, 'getPredictedEvents', { value: () => [8, 16].map(dt => ({
         clientX: box.left + (x + dt) / 297 * box.width,
         clientY: box.top + y / 210 * box.height, timeStamp: 1000 + i * 4 + dt, pressure: 0.5 })) });
       canvas.dispatchEvent(e);
@@ -604,6 +657,7 @@ test('finishing a long predicted stroke repaints only its tip', async ({ page })
       send('pointerdown', 0);
       const move = 'onpointerrawupdate' in canvas ? 'pointerrawupdate' : 'pointermove';
       for (let i = 1; i <= 1200; i++) send(move, i);
+      if (move === 'pointerrawupdate') send('pointermove', 1200);
       curves = 0;
       // Clearing during input finishes the stroke while its forecast is still visible.
       document.getElementById('clear-page').click();
@@ -715,7 +769,8 @@ test('predicted ink shares the pen taper and disappears when measurements replac
     };
     send('pointerdown', 0, 100);
     const move = 'onpointerrawupdate' in c ? 'pointerrawupdate' : 'pointermove';
-    for (let i = 1; i <= 100; i++) send(move, i, 100 + i * 0.4, i === 100);
+    for (let i = 1; i <= 100; i++) send(move, i, 100 + i * 0.4, move === 'pointermove' && i === 100);
+    if (move === 'pointerrawupdate') send('pointermove', 100, x, true);
     const {ctx, image} = pixels(), widths = [135, 146].map(mm => {
       const data = ctx.getImageData(Math.round(mm / 297 * image.width), 0, 1, image.height).data;
       let coverage = 0; for (let i = 3; i < data.length; i += 4) coverage += data[i] / 255;
@@ -725,7 +780,8 @@ test('predicted ink shares the pen taper and disappears when measurements replac
     const replaced = pixels(), tail = replaced.ctx.getImageData(Math.ceil(144 / 297 * c.width), 0,
       Math.floor(c.width * 0.1), c.height).data;
     const remainingPrediction = tail.some((v, i) => i % 4 === 3 && v > 0);
-    send(move, 102, x, true);
+    if (move === 'pointerrawupdate') send(move, 102, x);
+    send('pointermove', 102, x, true);
     await new Promise(resolve => setTimeout(resolve, 40));
     const expired = pixels(), beyond = expired.ctx.getImageData(Math.ceil(144 / 297 * c.width), 0,
       Math.floor(c.width * 0.1), c.height).data;

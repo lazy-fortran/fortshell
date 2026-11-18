@@ -1,6 +1,8 @@
 const TAU = 2 * Math.PI;
 export const INK = '#000';
 export const INK_CHUNK = 8;
+export const LEGACY_GEOMETRY = 1;
+export const GEOMETRY_REVISION = 2;
 const LOOKAHEAD = 2;
 const direction = (a, b) => {
   const x = b[0] - a[0], y = b[1] - a[1], d = Math.hypot(x, y);
@@ -68,11 +70,21 @@ function station(input, i) {
   return p;
 }
 
-function handle(before, at, after, along, length) {
+function handle(before, at, after, along, length, revision) {
   const a = before && direction(before, at), b = after && direction(at, after);
   if (!a || !b) return [along[0] * length, along[1] * length];
   // A zero tangent at a sharp turn keeps the interpolant inside the corner.
   if (dot(a, b) < 0.5) return [0, 0];
+  if (revision === 2) {
+    // The local circumcircle gives the tangent even when sample spacing is uneven.
+    const left = Math.hypot(at[0] - before[0], at[1] - before[1]);
+    const chord = Math.hypot(after[0] - before[0], after[1] - before[1]);
+    const curvature = (a[0] * b[1] - a[1] * b[0]) / chord;
+    const sin = left * curvature, cos = Math.sqrt(Math.max(0, 1 - sin * sin));
+    const arc = length * curvature;
+    const scale = 2 * length / (1 + Math.sqrt(Math.max(0, 1 - arc * arc)));
+    return [(a[0] * cos - a[1] * sin) * scale, (a[0] * sin + a[1] * cos) * scale];
+  }
   return [(a[0] + b[0]) * length / 2, (a[1] + b[1]) * length / 2];
 }
 
@@ -106,8 +118,9 @@ function curvatureBound([a, b, c, d]) {
 
 // Distance, rather than time spent pressing, controls brush width transitions.
 export class InkShape {
-  constructor(chunkSize = INK_CHUNK) {
+  constructor(chunkSize = INK_CHUNK, revision = GEOMETRY_REVISION) {
     this.chunkSize = chunkSize; this.points = []; this.distance = []; this.ends = []; this.chunks = [];
+    this.revision = revision;
   }
   update(input, first = 0, width = input[2] * 2, predicted = []) {
     const oldLength = this.distance.at(-1) || 0;
@@ -132,20 +145,25 @@ export class InkShape {
       const r = previous ? Math.max(previous[2] - d * 0.25,
         Math.min(previous[2] + d * 0.25, radius)) : radius;
       // Sparse events and simplified PDFs still need stations inside the tapers.
-      const steps = Math.max(1, Math.ceil(d / Math.max(0.05, width / 2)));
+      let steps = Math.max(1, Math.ceil(d / Math.max(0.05, width / 2)));
       let startHandle, endHandle;
-      if (steps > 1 && (before || after)) {
+      if ((steps > 1 || this.revision === 2 && d > 0.075) && (before || after)) {
         const point = [x, y], along = [(x - previous[0]) / d, (y - previous[1]) / d];
         if (before && before[0] === previous[0] && before[1] === previous[1]) before = null;
         if (after && after[0] === x && after[1] === y) after = null;
-        startHandle = handle(before, previous, point, along, d);
-        endHandle = handle(previous, point, after, along, d);
+        startHandle = handle(before, previous, point, along, d, this.revision);
+        endHandle = handle(previous, point, after, along, d, this.revision);
         const reflect = h => {
           const projection = 2 * dot(h, along);
           return [projection * along[0] - h[0], projection * along[1] - h[1]];
         };
         if (!before && dot(endHandle, along) > 0) startHandle = reflect(endHandle);
         if (!after && dot(startHandle, along) > 0) endHandle = reflect(startHandle);
+        if (this.revision === 2) {
+          const across = h => Math.abs(h[0] * along[1] - h[1] * along[0]);
+          const deviation = Math.max(across(startHandle), across(endHandle)) / 3;
+          steps = Math.max(steps, Math.ceil(Math.sqrt(deviation / 0.025)));
+        }
       }
       for (let j = 1; j <= steps; j++) {
         const u = j / steps;
@@ -203,9 +221,10 @@ export class InkShape {
     const endTangent = i === 0 || i === this.points.length - 1 ? [a, a] : null;
     return { incoming: edge, outgoing: edge, incomingTangent: endTangent, outgoingTangent: endTangent };
   }
-  outline(first = 0, end = this.points.length) {
+  outline(first = 0, end = this.points.length, minimumDotRadius = 0) {
     const last = this.points.length - 1, curves = [], caps = [];
-    if (first === 0 && last >= 0) caps.push([...this.points[0].slice(0, 2), this.radius(0)]);
+    if (first === 0 && last >= 0) caps.push([...this.points[0].slice(0, 2),
+      Math.max(this.radius(0), last === 0 ? minimumDotRadius : 0)]);
     if (last > 0 && end > last) caps.push([...this.points[last].slice(0, 2), this.radius(last)]);
     const stop = Math.min(end, last);
     if (first >= stop) return { curves, caps };
@@ -239,10 +258,17 @@ export class InkShape {
     for (const cap of caps) include(...cap);
     return box;
   }
-  path(ctx, { curves, caps } = this.outline()) {
-    for (const [[a, b, c, d], [e, f, g, h]] of curves) {
-      ctx.moveTo(...e); ctx.bezierCurveTo(...f, ...g, ...h);
-      ctx.lineTo(...d); ctx.bezierCurveTo(...c, ...b, ...a); ctx.closePath();
+  path(ctx, { curves, caps } = this.outline(), join = false) {
+    for (let first = 0, end; first < curves.length; first = end) {
+      end = first + 1;
+      // Common cross-sections cancel exactly. Keep the original Bézier edges.
+      while (join && end < curves.length && curves[end - 1][0][3] === curves[end][0][0]
+          && curves[end - 1][1][3] === curves[end][1][0]) end++;
+      ctx.moveTo(...curves[first][1][0]);
+      for (let i = first; i < end; i++) ctx.bezierCurveTo(...curves[i][1][1], ...curves[i][1][2], ...curves[i][1][3]);
+      ctx.lineTo(...curves[end - 1][0][3]);
+      for (let i = end - 1; i >= first; i--) ctx.bezierCurveTo(...curves[i][0][2], ...curves[i][0][1], ...curves[i][0][0]);
+      ctx.closePath();
     }
     for (const [x, y, r] of caps) {
       ctx.moveTo(x + r, y); ctx.arc(x, y, r, 0, TAU); ctx.closePath();
@@ -275,17 +301,4 @@ export class InkShape {
 
 export function mesh(points, first = 0) {
   const shape = new InkShape(); shape.update(points); return shape.mesh(first);
-}
-
-export function hitStroke(points, x, y, tolerance = 1.5) {
-  for (let i = 0; i < points.length; i += 3) {
-    if (Math.hypot(x - points[i], y - points[i + 1]) <= tolerance + points[i + 2]) return true;
-    if (i === 0) continue;
-    const ax = points[i - 3], ay = points[i - 2];
-    const dx = points[i] - ax, dy = points[i + 1] - ay, d = dx * dx + dy * dy;
-    const u = d ? Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / d)) : 0;
-    if (Math.hypot(x - ax - u * dx, y - ay - u * dy)
-        <= tolerance + Math.max(points[i + 2], points[i - 1])) return true;
-  }
-  return false;
 }

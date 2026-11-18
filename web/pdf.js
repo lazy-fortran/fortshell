@@ -1,5 +1,5 @@
 import { perfectOutline, outlinePath } from './perfect.js';
-import { InkShape } from './geometry.js';
+import { InkShape, LEGACY_GEOMETRY } from './geometry.js';
 let pdfjs;
 const MM = 72 / 25.4;
 
@@ -20,33 +20,8 @@ export async function renderPDF(pdf, number, canvas, pixelWidth) {
   await page.render({ canvasContext: canvas.getContext('2d'), viewport: scaled }).promise;
 }
 
-// Collinear samples with a stable radius do not need their own PDF primitives.
-export function simplify(points, tolerance = 0.025) {
-  const n = points.length / 3;
-  if (n < 3) return points;
-  const keep = new Uint8Array(n); keep[0] = keep[n - 1] = 1;
-  const stack = [[0, n - 1]];
-  while (stack.length) {
-    const [a, b] = stack.pop();
-    const ax = points[a * 3], ay = points[a * 3 + 1];
-    const dx = points[b * 3] - ax, dy = points[b * 3 + 1] - ay, length2 = dx * dx + dy * dy;
-    let worst = tolerance, at = -1;
-    for (let i = a + 1; i < b; i++) {
-      const u = length2 ? Math.max(0, Math.min(1,
-        ((points[i * 3] - ax) * dx + (points[i * 3 + 1] - ay) * dy) / length2)) : (i - a) / (b - a);
-      const distance = Math.hypot(points[i * 3] - ax - u * dx, points[i * 3 + 1] - ay - u * dy);
-      const dr = Math.abs(points[i * 3 + 2] - (points[a * 3 + 2] * (1 - u) + points[b * 3 + 2] * u));
-      if (distance + dr > worst) { worst = distance + dr; at = i; }
-    }
-    if (at >= 0) { keep[at] = 1; stack.push([a, at], [at, b]); }
-  }
-  const output = [];
-  for (let i = 0; i < n; i++) if (keep[i]) output.push(...points.subarray(i * 3, i * 3 + 3));
-  return new Float32Array(output);
-}
-
-export function svgInk(input, width) {
-  const shape = new InkShape(); shape.update(simplify(input), 0, width);
+export function svgInk(input, width, revision = LEGACY_GEOMETRY) {
+  const shape = new InkShape(undefined, revision); shape.update(input, 0, width);
   const f = x => Number(x.toFixed(4)), xy = values => values.map(f).join(' ');
   let path = '';
   shape.path({
@@ -61,7 +36,7 @@ export function svgInk(input, width) {
         + `C${xy([x - r, y - k, x - k, y - r, x, y - r])}`
         + `C${xy([x + k, y - r, x + r, y - k, x + r, y])}`;
     },
-  });
+  }, undefined, true);
   return path;
 }
 
@@ -85,7 +60,8 @@ export async function exportPDF(snapshot, strokes) {
     page.pushOperators(pushGraphicsState(), concatTransformationMatrix(...transforms[rotation]));
     for (const stroke of strokes) {
       if (!stroke.visible || stroke.page !== i + 1 || !stroke.points.length) continue;
-      const path = stroke.engine === 3 ? outlinePath(perfectOutline(stroke.raw, stroke.width)) : svgInk(stroke.points, stroke.width);
+      const path = stroke.engine === 3 ? outlinePath(perfectOutline(stroke.raw, stroke.width))
+        : svgInk(stroke.points, stroke.width, stroke.geometry);
       page.drawSvgPath(path, { x: 0, y: 0, scale: MM,
         color: rgb(0, 0, 0), borderWidth: 0 });
     }

@@ -1,7 +1,7 @@
 import { PointerSurface } from 'fortui/surface';
 import { InkModel } from 'fortink/model';
-import { createRenderer } from './renderers.js';
-import { hitStroke, INK } from './geometry.js';
+import { createRenderer, minimumDotRadius } from './renderers.js';
+import { InkShape, INK, GEOMETRY_REVISION, LEGACY_GEOMETRY } from './geometry.js';
 import { NotebookStore } from './storage.js';
 import { openPDF, renderPDF, exportPDF } from './pdf.js';
 import { runBenchmark } from './benchmark.js';
@@ -17,7 +17,9 @@ let M, store, committed, activeRenderer, surface, current = 0, drawn = 0, frame 
 let engine = 'wasm', renderer = 'canvas', model = new InkModel(), predictions = [];
 let pdf = null, pdfBytes = null, pdfPages = 0, pageRevision = 0, zoom = 1, ready = false;
 let renderGeneration = 0, changing = Promise.resolve(), imports = Promise.resolve();
-const saved = new Map();
+const saved = new Map(), strokeGeometry = new Map();
+let eraserTargets = [], eraserContext;
+const geometry = id => strokeGeometry.get(id) ?? LEGACY_GEOMETRY;
 let operation = null, results;
 let scheduling = 'immediate', profiler = null, latencyEvents, latencyResults;
 let controlsDirty = false;
@@ -33,7 +35,7 @@ function points(id) {
 }
 function strokeMeta(id, complete = true) {
   return { id, page: M._fs_stroke_page(id), width: M._fs_meta(id, 0), colour: M._fs_meta(id, 1),
-    engine: M._fs_meta(id, 2), visible: !!M._fs_visible(id), complete, n: M._fs_size(id) };
+    engine: M._fs_meta(id, 2), geometry: geometry(id), visible: !!M._fs_visible(id), complete, n: M._fs_size(id) };
 }
 function metadata() {
   return { version: 1, title: $('title').value, current: M._fs_current(), pdfPages,
@@ -129,6 +131,39 @@ function coordinates(s) {
     Math.max(0, Math.min(h, (s.y - rect.top) / rect.height * h)), s.t,
     Math.max(0, Math.min(1, s.pressure ?? 0.5))];
 }
+function polygonPath(outline) {
+  const path = new Path2D();
+  outline.forEach((p, i) => i ? path.lineTo(...p) : path.moveTo(...p));
+  path.closePath();
+  return path;
+}
+function eraserRegion(id) {
+  if (M._fs_meta(id, 2) === 3) {
+    const outline = perfectOutline(raw(id), M._fs_meta(id, 0));
+    const bounds = [Infinity, Infinity, -Infinity, -Infinity];
+    for (const [x, y] of outline) {
+      bounds[0] = Math.min(bounds[0], x); bounds[1] = Math.min(bounds[1], y);
+      bounds[2] = Math.max(bounds[2], x); bounds[3] = Math.max(bounds[3], y);
+    }
+    return { id, path: polygonPath(outline), bounds };
+  }
+  const shape = new InkShape(undefined, geometry(id));
+  shape.update(points(id), 0, M._fs_meta(id, 0));
+  const outline = shape.outline(0, shape.points.length, minimumDotRadius(committed));
+  const path = new Path2D(); shape.path(path, outline);
+  return { id, path, bounds: shape.bounds(outline) };
+}
+function eraseAt(x, y) {
+  const tolerance = 1.5;
+  const c = eraserContext ||= document.createElement('canvas').getContext('2d');
+  c.lineWidth = 2 * tolerance; c.lineJoin = 'round';
+  for (const { id, path, bounds: [left, top, right, bottom] } of eraserTargets) {
+    if (x < left - tolerance || x > right + tolerance || y < top - tolerance || y > bottom + tolerance) continue;
+    if (M._fs_visible(id) && (c.isPointInPath(path, x, y) || c.isPointInStroke(path, x, y))) {
+      M._fs_toggle(id); checkpoint(id, true);
+    }
+  }
+}
 function startStroke(e) {
   if (!ready || operation || current) return false;
   const page = M._fs_current();
@@ -138,29 +173,31 @@ function startStroke(e) {
   if (document.activeElement?.matches('input,textarea,[contenteditable]')) document.activeElement.blur();
   getSelection()?.removeAllRanges();
   $('prompt').hidden = true;
-  if (M._fs_tool(-1) === 1 || e.button === 5) { current = -1; return true; }
+  if (M._fs_tool(-1) === 1 || e.button === 5) {
+    for (let id = M._fs_count(); id >= 1; id--)
+      if (M._fs_visible(id) && M._fs_stroke_page(id) === page && M._fs_size(id)) eraserTargets.push(eraserRegion(id));
+    current = -1;
+    return true;
+  }
   current = M._fs_begin(M._fs_width(0), 0, engine === 'wasm' ? 0 : engine === 'js' ? 1 : engine === 'perfect' ? 3 : 2);
   if (!current) return false;
+  strokeGeometry.set(current, GEOMETRY_REVISION);
   model.reset(); drawn = 0; predictions = [];
   return true;
 }
 let checkpointTimer = null, predictionTimer = null;
 function appendSamples(samples, predicted) {
   if (current === -1) {
+    if (!samples.length) return;
     for (const sample of samples) {
       const [x, y] = coordinates(sample);
-      for (let id = M._fs_count(); id >= 1; id--) {
-        if (M._fs_visible(id) && M._fs_stroke_page(id) === M._fs_current()
-            && hitStroke(points(id), x, y)) {
-          M._fs_toggle(id); checkpoint(id, true);
-        }
-      }
+      eraseAt(x, y);
     }
     if (!frame) frame = requestAnimationFrame(() => { frame = 0; redrawCommitted(); });
     return;
   }
-  if (!current) return;
-  const timing = profiler?.begin(samples.length, { engine, renderer, scheduling });
+  if (!current || !(samples.length || predicted.length || predictions.length)) return;
+  const timing = samples.length && profiler?.begin(samples.length, { engine, renderer, scheduling });
   for (let start = 0; start < samples.length; start += 2048) {
     const before = timing && performance.now();
     const batch = samples.slice(start, start + 2048), input = new Float32Array(batch.length * 4);
@@ -190,7 +227,7 @@ function appendSamples(samples, predicted) {
     if (scheduling === 'immediate') drawActive();
     else if (!frame) frame = requestAnimationFrame(drawActive);
   }, 16);
-  if (!checkpointTimer) checkpointTimer = setTimeout(() => {
+  if (samples.length && !checkpointTimer) checkpointTimer = setTimeout(() => {
     checkpointTimer = null; checkpoint(current);
   }, 750);
   if (timing) profiler.accept(timing);
@@ -209,12 +246,11 @@ function drawPerfect(target, id, preview = []) {
   if (!c) throw new Error('The reference outline requires Canvas 2D');
   const { x, y, sx, sy } = target.raster;
   c.setTransform(sx, 0, 0, sy, -x, -y);
-  c.beginPath(); outline.forEach((p, i) => i ? c.lineTo(...p) : c.moveTo(...p));
-  c.closePath(); c.fillStyle = INK; c.fill();
+  c.fillStyle = INK; c.fill(polygonPath(outline));
 }
-function drawStroke(target, id, first = 0, live = false) {
+function drawStroke(target, id) {
   if (M._fs_meta(id, 2) === 3) drawPerfect(target, id);
-  else target.draw(points(id), first, M._fs_meta(id, 0), live);
+  else target.draw(points(id), 0, M._fs_meta(id, 0), false, [], geometry(id));
 }
 function drawActive() {
   frame = 0;
@@ -228,7 +264,7 @@ function drawActive() {
   }
   if (engine === 'perfect') { activeRenderer.clear(); drawPerfect(activeRenderer, current, preview); }
   else activeRenderer.draw(p, drawn, M._fs_meta(current, 0), true,
-    preview.map(([x, y]) => [x, y, p.at(-1)]));
+    preview.map(([x, y]) => [x, y, p.at(-1)]), geometry(current));
   drawn = M._fs_size(current);
   if (profiler) profiler.submitted(started);
 }
@@ -237,12 +273,12 @@ function endStroke(cancelled) {
   cancelAnimationFrame(frame); frame = 0;
   clearTimeout(checkpointTimer); checkpointTimer = null;
   clearTimeout(predictionTimer); predictionTimer = null; predictions = [];
-  if (current === -1) { current = 0; redrawCommitted(); refreshControls(); return; }
+  if (current === -1) { current = 0; eraserTargets = []; redrawCommitted(); refreshControls(); return; }
   const started = profiler && performance.now();
   const id = M._fs_finish(cancelled ? 1 : 0); current = 0;
   if (M._fs_visible(id)) {
     if (activeRenderer.commit && M._fs_meta(id, 2) !== 3)
-      activeRenderer.commit(committed, points(id), M._fs_meta(id, 0), drawn);
+      activeRenderer.commit(committed, points(id), M._fs_meta(id, 0), drawn, geometry(id));
     else drawStroke(committed, id);
   }
   activeRenderer.clear();
@@ -279,7 +315,7 @@ async function restore(s) {
   validateSnapshot(s);
   const nextPDF = s.pdf ? await openPDF(s.pdf) : null;
   // Validation completes before replacing the current document.
-  M._fs_reset(); saved.clear();
+  M._fs_reset(); saved.clear(); strokeGeometry.clear();
   M._fs_pages(s.meta.pages.length);
   s.meta.pages.forEach(([w, h], i) => M._fs_set_dimensions(i + 1, w, h));
   const sorted = [...s.strokes].sort((a, b) => a.id - b.id);
@@ -290,6 +326,7 @@ async function restore(s) {
     }
     M._fs_page(stroke.page);
     const id = M._fs_begin(stroke.width, stroke.colour || 0, stroke.engine);
+    strokeGeometry.set(id, stroke.geometry ?? LEGACY_GEOMETRY);
     const restoredModel = new InkModel();
     const pieces = s.chunks.filter(c => c.key[0] === stroke.id).sort((a, b) => a.key[1] - b.key[1]);
     let offset = 0;

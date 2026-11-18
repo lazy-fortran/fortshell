@@ -137,6 +137,8 @@ notebook. Export the current notebook before opening another.
 
 The `.fortshell` format is versioned JSON containing page dimensions in
 millimetres, stroke metadata, raw samples `[x, y, seconds, pressure]`, and an
-optional base64 PDF. Model identifiers preserve the selected pipeline on reload.
-PDF export simplifies nearly collinear samples within 0.025 mm, includes radius
-changes, and retains imported PDF pages as vectors rather than page screenshots.
+optional base64 PDF. The engine and geometry revision identify each stroke's
+pipeline. Strokes saved before geometry revisions use the original fit.
+Keep existing revisions reproducible when changing the model or geometry.
+Erasing and vector PDF export use the fitted outline shown in the notebook.
+PDF export preserves the content of imported pages as vectors where possible.

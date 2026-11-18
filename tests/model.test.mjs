@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { InkModel } from '../../fortink/web/model.js';
-import { hitStroke, mesh, InkShape } from '../web/geometry.js';
+import { mesh, InkShape } from '../web/geometry.js';
 
 test('stationary pressure has a fixed radius and no drift', () => {
   const model = new InkModel(), input = new Float32Array(4 * 500);
@@ -19,9 +19,8 @@ test('coalescing does not change the model trajectory', () => {
   for (let i = 0; i < 200; i++) single.batch(input.subarray(i * 4, i * 4 + 4), 1, output.subarray(i * 3, i * 3 + 3));
   assert.deepEqual(output, whole);
 });
-test('eraser hits the segment between widely spaced samples', () => {
+test('widely spaced samples produce a finite mesh', () => {
   const points = new Float32Array([0, 0, 0.5, 100, 0, 0.5]);
-  assert.ok(hitStroke(points, 50, 0)); assert.ok(!hitStroke(points, 50, 10));
   assert.ok(mesh(points).length > 0); assert.ok(mesh(points).every(Number.isFinite));
 });
 
@@ -95,6 +94,18 @@ test('sparse handwriting smooths transverse jitter through inflections', () => {
   const middle = shape.points.slice(shape.ends[2], shape.ends.at(-3));
   const rms = Math.sqrt(middle.reduce((sum, [x, y]) => sum + (y - curve(x)) ** 2, 0) / middle.length);
   assert.ok(rms < 0.05, `RMS deviation from the underlying curve: ${rms} mm`);
+});
+
+test('uneven samples on a tight arc retain its analytic radius', () => {
+  const radius = 2, points = [];
+  for (let i = 0; i <= 18; i++) {
+    const angle = (i + 0.3 * Math.sin(i * 2)) / 3.6;
+    points.push(radius * Math.cos(angle), radius * Math.sin(angle), 0.4);
+  }
+  const shape = new InkShape(); shape.update(Float32Array.from(points), 0, 1.5);
+  const error = shape.points.map(([x, y]) => Math.hypot(x, y) - radius);
+  const rms = Math.sqrt(error.reduce((sum, difference) => sum + difference ** 2, 0) / error.length);
+  assert.ok(rms < 0.012, `RMS deviation from the analytic radius: ${rms} mm`);
 });
 
 test('the outside of a sparse circular stroke follows its geometric radius', () => {

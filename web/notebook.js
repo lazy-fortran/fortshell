@@ -1,3 +1,5 @@
+import { GEOMETRY_REVISION, LEGACY_GEOMETRY } from './geometry.js';
+
 export function validateSnapshot(s) {
   if (s.meta?.version !== 1 || !Array.isArray(s.meta.pages) || !s.meta.pages.length
       || s.meta.pages.length > 100000 || !Array.isArray(s.strokes) || !Array.isArray(s.chunks)) throw new Error('Unsupported notebook');
@@ -7,7 +9,8 @@ export function validateSnapshot(s) {
     if (!Number.isInteger(stroke.id) || stroke.id < 1 || stroke.id > 1000000 || ids.has(stroke.id)
         || !Number.isInteger(stroke.page) || stroke.page < 1 || stroke.page > s.meta.pages.length
         || !Number.isFinite(stroke.width) || stroke.width <= 0 || stroke.width > 100
-        || ![0, 1, 2, 3].includes(stroke.engine)) throw new Error('Invalid stroke');
+        || ![0, 1, 2, 3].includes(stroke.engine)
+        || ![undefined, LEGACY_GEOMETRY, GEOMETRY_REVISION].includes(stroke.geometry)) throw new Error('Invalid stroke');
     ids.set(stroke.id, []);
   }
   for (const chunk of s.chunks) {
