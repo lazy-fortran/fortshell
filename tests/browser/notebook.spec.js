@@ -68,6 +68,16 @@ test('bounded autosave writes, no writes at idle, and instant outer typing', asy
   await expect(page.locator('#prompt')).toBeHidden();
 });
 
+test('a dead key opens command entry and its composed character arrives once', async ({ page }) => {
+  await open(page); await page.locator('#workspace').focus();
+  await page.evaluate(() => document.getElementById('workspace').dispatchEvent(
+    new KeyboardEvent('keydown', { key: 'Dead', code: 'Quote', bubbles: true, cancelable: true })));
+  await expect(page.locator('#prompt-text')).toBeFocused();
+  await page.keyboard.insertText('é');
+  await page.keyboard.type('x');
+  await expect(page.locator('#prompt-text')).toHaveValue('éx');
+});
+
 test('another tab cannot overwrite the working notebook', async ({ page, context }) => {
   await open(page); await draw(page); await page.evaluate(() => window.fortshell.flush());
   const other = await context.newPage(); await other.goto('/');

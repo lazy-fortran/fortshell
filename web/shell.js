@@ -719,9 +719,8 @@ async function boot() {
     if (e.defaultPrevented || e.isComposing || e.ctrlKey || e.metaKey || e.altKey
         || e.target.closest('input,textarea,select,button,[contenteditable]')) return;
     if ((e.key === 'Delete' || e.key === 'Backspace') && selection) { e.preventDefault(); deleteSelection(); return; }
-    if (e.key.length === 1) {
-      e.preventDefault(); $('prompt').hidden = false; $('prompt-text').focus(); $('prompt-text').value += e.key;
-    }
+    // The field receives the key itself, so dead keys and input methods compose there.
+    if (e.key.length === 1 || e.key === 'Dead') { $('prompt').hidden = false; $('prompt-text').focus(); }
     if (e.key === 'Escape') $('prompt').hidden = true;
   });
   $('prompt-close').onclick = () => { $('prompt').hidden = true; $('workspace').focus(); };
