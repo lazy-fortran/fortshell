@@ -7,7 +7,8 @@ module fortshell_document
     public :: fs_reset, fs_begin, fs_append, fs_finish, fs_count, fs_current, fs_pages, &
         fs_page, fs_next, fs_previous, fs_visible, fs_toggle, fs_undo, fs_redo, &
         fs_size, fs_data, fs_meta, fs_input, fs_output, fs_width, fs_tool, &
-        fs_dimensions, fs_set_dimensions, fs_stroke_page, fs_can_undo, fs_can_redo, fs_colour
+        fs_dimensions, fs_set_dimensions, fs_stroke_page, fs_can_undo, fs_can_redo, fs_colour, &
+        fs_group, fs_copy
     ! Pen colours are indices into the host's palette.
     integer, parameter, public :: FS_COLOURS = 6
     integer, parameter :: BATCH = 2048
@@ -23,6 +24,8 @@ module fortshell_document
     integer, allocatable, save :: history(:, :)
     integer, save :: stroke_count = 0, current_page = 1, page_count = 1
     integer, save :: history_head = 0, history_count = 0, active = 0
+    ! Entries recorded while a group is open share its number and are undone together.
+    integer, save :: group = 0, groups = 0
     integer(c_int), save :: tool = 0, pen_colour = 0
     real(c_float), save :: pen_width = 1.5
     type(ink_state_t), save :: ink
@@ -31,7 +34,7 @@ contains
         if (allocated(strokes)) deallocate(strokes)
         if (allocated(history)) deallocate(history)
         if (allocated(dimensions)) deallocate(dimensions)
-        allocate(strokes(64), history(2,128), dimensions(2,64))
+        allocate(strokes(64), history(3,128), dimensions(2,64))
         dimensions(1,:) = 297
         dimensions(2,:) = 210
         stroke_count = 0
@@ -40,6 +43,8 @@ contains
         history_head = 0
         history_count = 0
         active = 0
+        group = 0
+        groups = 0
     end subroutine
 
     integer(c_int) function fs_count() bind(C)
@@ -167,14 +172,55 @@ contains
         integer, intent(in) :: id, value
         integer, allocatable :: grown(:,:)
         if (history_head == size(history,2)) then
-            allocate(grown(2,size(history,2)*2))
+            allocate(grown(3,size(history,2)*2))
             grown(:,1:history_head) = history(:,1:history_head)
             call move_alloc(grown,history)
         end if
         history_head = history_head+1
         history_count = history_head
-        history(:,history_head) = [id,value]
+        history(:,history_head) = [id,value,group]
     end subroutine
+
+    subroutine fs_group(open) bind(C)
+        !! Opens (1) or closes (0) an undo group: changes recorded in between,
+        !! such as clearing a page or moving a selection, are one step.
+        integer(c_int), value :: open
+        if (open /= 0) then
+            groups = groups+1
+            group = groups
+        else
+            group = 0
+        end if
+    end subroutine
+
+    integer(c_int) function fs_copy(id, dx, dy) bind(C)
+        !! A visible copy of stroke `id` moved by (dx, dy) millimetres on the
+        !! same page; 0 if `id` is not a stroke.
+        integer(c_int), value :: id
+        real(c_float), value :: dx, dy
+        integer :: page, n
+        fs_copy = 0
+        if (active /= 0 .or. id < 1 .or. id > stroke_count) return
+        if (.not. all(ieee_is_finite([dx,dy]))) return
+        page = current_page
+        current_page = strokes(id)%page
+        fs_copy = fs_begin(strokes(id)%width, int(strokes(id)%colour,c_int), int(strokes(id)%engine,c_int))
+        current_page = page
+        if (fs_copy == 0) return
+        n = strokes(id)%n
+        associate(s => strokes(fs_copy), o => strokes(id))
+            s%page = o%page
+            s%raw = o%raw
+            s%modeled = o%modeled
+            s%n = n
+            s%raw(1,1:n) = s%raw(1,1:n)+dx
+            s%raw(2,1:n) = s%raw(2,1:n)+dy
+            s%modeled(1,1:n) = s%modeled(1,1:n)+dx
+            s%modeled(2,1:n) = s%modeled(2,1:n)+dy
+        end associate
+        active = 0
+        call record(int(fs_copy),1)
+    end function
 
     integer(c_int) function fs_finish(cancel) bind(C)
         integer(c_int), value :: cancel
@@ -249,9 +295,14 @@ contains
         integer :: id
         fs_undo = 0
         if (active /= 0 .or. history_head == 0) return
-        id = history(1,history_head)
-        strokes(id)%visible = history(2,history_head) == 0
-        history_head = history_head-1
+        do
+            id = history(1,history_head)
+            strokes(id)%visible = history(2,history_head) == 0
+            history_head = history_head-1
+            if (history_head == 0) exit
+            if (history(3,history_head+1) == 0 .or. &
+                history(3,history_head) /= history(3,history_head+1)) exit
+        end do
         current_page = strokes(id)%page
         fs_undo = id
     end function
@@ -260,9 +311,14 @@ contains
         integer :: id
         fs_redo = 0
         if (active /= 0 .or. history_head == history_count) return
-        history_head = history_head+1
-        id = history(1,history_head)
-        strokes(id)%visible = history(2,history_head) /= 0
+        do
+            history_head = history_head+1
+            id = history(1,history_head)
+            strokes(id)%visible = history(2,history_head) /= 0
+            if (history_head == history_count) exit
+            if (history(3,history_head) == 0 .or. &
+                history(3,history_head) /= history(3,history_head+1)) exit
+        end do
         current_page = strokes(id)%page
         fs_redo = id
     end function

@@ -63,7 +63,7 @@ select { border-color: var(--line); background: white; }
   box-shadow: 0 0 0 1px #18303d14, 0 6px 24px #18303d24; margin: 0 auto; flex: none; isolation: isolate; overflow: hidden; }
 #paper canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
 #active { touch-action: none; cursor: crosshair; }
-#background, #committed { pointer-events: none; }
+#background, #committed, #overlay { pointer-events: none; }
 
 #compare { padding: 10px 14px; border-top: 1px solid var(--line); background: var(--panel); z-index: 4;
   max-height: 35dvh; overflow-y: auto; display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; }

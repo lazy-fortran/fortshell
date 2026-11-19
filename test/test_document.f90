@@ -60,6 +60,29 @@ program test_document
         n = fs_finish(0)
     end do
     if (fs_count()/=150) error stop 'stroke growth'
+    ! A grouped change (clearing a page, moving a selection) is one undo step.
+    call fs_group(1)
+    call fs_toggle(1)
+    call fs_toggle(2)
+    n = fs_copy(3,10.0_c_float,-2.0_c_float)
+    call fs_toggle(3)
+    call fs_group(0)
+    if (n/=151 .or. fs_count()/=151) error stop 'copy id'
+    if (fs_visible(1)/=0 .or. fs_visible(2)/=0 .or. fs_visible(3)/=0 .or. fs_visible(n)/=1) &
+        error stop 'grouped changes'
+    call c_f_pointer(fs_data(n,0),data,[4,500])
+    if (any(data(1,:)/=13.0) .or. data(2,1)/=-1.0 .or. fs_size(n)/=500) error stop 'moved copy'
+    call c_f_pointer(fs_data(n,1),data,[3,500])
+    if (data(1,500)/=13.0) error stop 'moved model'
+    call fs_toggle(4)
+    i = fs_undo()
+    if (fs_visible(4)/=1 .or. fs_visible(1)/=0) error stop 'ungrouped step undone alone'
+    i = fs_undo()
+    if (fs_visible(1)/=1 .or. fs_visible(2)/=1 .or. fs_visible(3)/=1 .or. fs_visible(n)/=0) &
+        error stop 'group undone in one step'
+    i = fs_redo()
+    if (fs_visible(1)/=0 .or. fs_visible(3)/=0 .or. fs_visible(n)/=1 .or. fs_visible(4)/=1) &
+        error stop 'group redone in one step'
     do i = 1,150
         if (fs_size(i)/=500) error stop 'grown stroke samples'
         call c_f_pointer(fs_data(int(i,c_int),0),data,[4,500])

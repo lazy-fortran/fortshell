@@ -858,3 +858,60 @@ test('pen colours, toggle state and ink past the page edge', async ({ page }) =>
     return new Float32Array(M.HEAPU8.buffer, M._fs_data(id, 0), M._fs_size(id) * 4).at(-4); });
   expect(lastX).toBeGreaterThan(297);
 });
+
+test('lasso moves strokes as one undo step and clear page undoes at once', async ({ page }) => {
+  await open(page);
+  await draw(page);
+  const box = await page.locator('#active').boundingBox();
+  const M = () => page.evaluate(() => { const M = window.fortshell.module;
+    return Array.from({ length: M._fs_count() }, (_, i) => ({ id: i + 1, visible: M._fs_visible(i + 1),
+      x: new Float32Array(M.HEAPU8.buffer, M._fs_data(i + 1, 0), 4)[0] })); });
+  await page.locator('[data-id=lasso]').click();
+  await expect(page.locator('[data-id=lasso]')).toHaveAttribute('aria-pressed', 'true');
+  // Lasso around the whole stroke (drawn from 20 % to 70 % across, 30 % to 40 % down).
+  const loop = [[0.1, 0.2], [0.8, 0.2], [0.8, 0.5], [0.1, 0.5], [0.1, 0.2]];
+  await page.mouse.move(box.x + box.width * loop[0][0], box.y + box.height * loop[0][1]);
+  await page.mouse.down();
+  for (const [fx, fy] of loop.slice(1)) await page.mouse.move(box.x + box.width * fx, box.y + box.height * fy, { steps: 8 });
+  await page.mouse.up();
+  await page.mouse.move(box.x + box.width * 0.45, box.y + box.height * 0.35); await page.mouse.down();
+  await page.mouse.move(box.x + box.width * 0.45, box.y + box.height * 0.75, { steps: 10 }); await page.mouse.up();
+  let strokes = await M();
+  expect(strokes.length).toBe(2);
+  expect(strokes[0].visible).toBe(0); expect(strokes[1].visible).toBe(1);
+  expect(strokes[1].x).toBeCloseTo(strokes[0].x, 3);
+  await page.locator('[data-id=undo]').click();
+  await expect.poll(async () => (await M()).map(s => s.visible)).toEqual([1, 0]);
+  await page.locator('[data-id=pen]').click();
+  await draw(page);
+  await page.locator('#more summary').click(); await page.locator('#clear-page').click();
+  expect((await M()).every(s => !s.visible)).toBe(true);
+  await page.locator('[data-id=undo]').click();
+  await expect.poll(async () => (await M()).map(s => s.visible)).toEqual([1, 0, 1]);
+});
+
+test('pen settings survive a reload', async ({ page }) => {
+  await open(page);
+  await page.locator('[data-id=colour-3]').click();
+  await draw(page);
+  await page.evaluate(() => window.fortshell.flush());
+  await page.reload();
+  await page.waitForFunction(() => window.fortshell?.ready);
+  await expect(page.locator('[data-id=colour-3]')).toHaveAttribute('aria-pressed', 'true');
+  expect(await page.evaluate(() => window.fortshell.module._fs_colour(-1))).toBe(3);
+});
+
+test('two fingers pinch to zoom and never write', async ({ page }) => {
+  await open(page);
+  const before = await page.locator('#paper').boundingBox();
+  await page.evaluate(({ x, y }) => {
+    const ws = document.getElementById('workspace');
+    const send = (type, id, px, py) => ws.dispatchEvent(new PointerEvent(type, { pointerId: id, pointerType: 'touch',
+      clientX: px, clientY: py, bubbles: true, cancelable: true, isPrimary: id === 1 }));
+    send('pointerdown', 1, x - 50, y); send('pointerdown', 2, x + 50, y);
+    for (let i = 1; i <= 10; i++) { send('pointermove', 1, x - 50 - 10 * i, y); send('pointermove', 2, x + 50 + 10 * i, y); }
+    send('pointerup', 1, x - 150, y); send('pointerup', 2, x + 150, y);
+  }, { x: before.x + before.width / 2, y: before.y + before.height / 2 });
+  await expect.poll(async () => (await page.locator('#paper').boundingBox()).width).toBeGreaterThan(before.width * 1.5);
+  expect(await page.evaluate(() => window.fortshell.module._fs_count())).toBe(0);
+});

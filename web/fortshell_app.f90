@@ -31,6 +31,7 @@ contains
         call row_begin(gap=2.0,look='group')
         if (button('pen','Pen',pressed=tool==0)) tool = fs_tool(0)
         if (button('eraser','Eraser',pressed=tool==1)) tool = fs_tool(1)
+        if (button('lasso','Lasso',pressed=tool==2)) tool = fs_tool(2)
         call row_end()
 
         colour = fs_colour(-1)

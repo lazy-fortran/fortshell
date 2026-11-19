@@ -39,7 +39,12 @@ function strokeMeta(id, complete = true) {
 }
 function metadata() {
   return { version: 1, title: $('title').value, current: M._fs_current(), pdfPages,
-    pages: Array.from({ length: M._fs_pages(0) }, (_, i) => pageSize(i + 1)) };
+    pages: Array.from({ length: M._fs_pages(0) }, (_, i) => pageSize(i + 1)),
+    pen: { tool: M._fs_tool(-1), colour: M._fs_colour(-1), width: M._fs_width(0) } };
+}
+function checkpointPage(page) {
+  // A grouped undo or redo can change every stroke of its page.
+  for (let id = 1; id <= M._fs_count(); id++) if (M._fs_stroke_page(id) === page) checkpoint(id, true);
 }
 function metaChanged() { if (ready) store.put('meta', 'notebook', metadata()); }
 function checkpoint(id, complete = false) {
@@ -108,6 +113,8 @@ async function renderPage() {
   for (let id = 1; id <= M._fs_count(); id++) {
     if (M._fs_visible(id) && M._fs_stroke_page(id) === page) drawStroke(committed, id);
   }
+  $('overlay').width = Math.max(1, Math.ceil(cssWidth * dpr)); $('overlay').height = Math.max(1, Math.ceil(cssHeight * dpr));
+  drawOverlay();
   if (pdf && page <= pdfPages) await renderPDF(pdf, page, $('background'), Math.ceil(cssWidth * dpr));
   else $('background').width = $('background').height = 1;
   if (generation !== renderGeneration) return;
@@ -173,6 +180,18 @@ function startStroke(e) {
   if (document.activeElement?.matches('input,textarea,[contenteditable]')) document.activeElement.blur();
   getSelection()?.removeAllRanges();
   $('prompt').hidden = true;
+  if (M._fs_tool(-1) === 2 && e.button !== 5) {
+    const [x, y] = coordinates(e);
+    if (selection && x >= selection.bounds[0] && x <= selection.bounds[2]
+        && y >= selection.bounds[1] && y <= selection.bounds[3]) {
+      moveFrom = [x, y]; moveBy = [0, 0]; current = -3;
+      redrawCommitted(new Set(selection.ids)); drawOverlay();
+    } else {
+      selection = null; lasso = [[x, y]]; current = -2; drawOverlay();
+    }
+    return true;
+  }
+  clearSelection();
   if (M._fs_tool(-1) === 1 || e.button === 5) {
     for (let id = M._fs_count(); id >= 1; id--)
       if (M._fs_visible(id) && M._fs_stroke_page(id) === page && M._fs_size(id)) eraserTargets.push(eraserRegion(id));
@@ -187,6 +206,15 @@ function startStroke(e) {
 }
 let checkpointTimer = null, predictionTimer = null;
 function appendSamples(samples, predicted) {
+  if (current === -2 || current === -3) {
+    if (!samples.length) return;
+    for (const sample of samples) {
+      const [x, y] = coordinates(sample);
+      if (current === -2) lasso.push([x, y]); else moveBy = [x - moveFrom[0], y - moveFrom[1]];
+    }
+    if (!frame) frame = requestAnimationFrame(() => { frame = 0; drawOverlay(); });
+    return;
+  }
   if (current === -1) {
     if (!samples.length) return;
     for (const sample of samples) {
@@ -274,6 +302,8 @@ function endStroke(cancelled) {
   clearTimeout(checkpointTimer); checkpointTimer = null;
   clearTimeout(predictionTimer); predictionTimer = null; predictions = [];
   if (current === -1) { current = 0; eraserTargets = []; redrawCommitted(); refreshControls(); return; }
+  if (current === -2) { current = 0; finishLasso(); return; }
+  if (current === -3) { current = 0; finishMove(); return; }
   const started = profiler && performance.now();
   const id = M._fs_finish(cancelled ? 1 : 0); current = 0;
   if (M._fs_visible(id)) {
@@ -285,10 +315,100 @@ function endStroke(cancelled) {
   if (profiler) profiler.submitted(started);
   checkpoint(id, true); refreshControls();
 }
-function redrawCommitted() {
+function redrawCommitted(hidden = null) {
   committed.clear();
-  for (let id = 1; id <= M._fs_count(); id++) if (M._fs_visible(id)
+  for (let id = 1; id <= M._fs_count(); id++) if (M._fs_visible(id) && !hidden?.has(id)
       && M._fs_stroke_page(id) === M._fs_current()) drawStroke(committed, id);
+}
+
+// Lasso: a closed path selects the strokes with most of their samples inside;
+// dragging inside the selection moves it, Delete removes it. Each is one undo step.
+let lasso = [], selection = null, moveFrom = null, moveBy = [0, 0];
+function inside(polygon, x, y) {
+  let hit = false;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const [xi, yi] = polygon[i], [xj, yj] = polygon[j];
+    if ((yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) hit = !hit;
+  }
+  return hit;
+}
+function outlinePath(id, dx = 0, dy = 0) {
+  const p = points(id).slice();
+  for (let i = 0; i < p.length; i += 3) { p[i] += dx; p[i + 1] += dy; }
+  const shape = new InkShape(undefined, geometry(id));
+  shape.update(p, 0, M._fs_meta(id, 0));
+  const outline = shape.outline(0, shape.points.length, 0.05), path = new Path2D();
+  shape.path(path, outline);
+  return path;
+}
+function selectionBounds(ids) {
+  const b = [Infinity, Infinity, -Infinity, -Infinity];
+  for (const id of ids) {
+    const r = raw(id), w = M._fs_meta(id, 0);
+    for (let i = 0; i < r.length; i += 4) {
+      b[0] = Math.min(b[0], r[i] - w); b[1] = Math.min(b[1], r[i + 1] - w);
+      b[2] = Math.max(b[2], r[i] + w); b[3] = Math.max(b[3], r[i + 1] + w);
+    }
+  }
+  return b;
+}
+function clearSelection() {
+  if (!selection && !lasso.length) return;
+  selection = null; lasso = []; moveFrom = null; drawOverlay();
+}
+function drawOverlay() {
+  const canvas = $('overlay'), c = canvas.getContext('2d');
+  if (!M || !c) return;
+  const [w, h] = pageSize();
+  c.setTransform(1, 0, 0, 1, 0, 0); c.clearRect(0, 0, canvas.width, canvas.height);
+  c.setTransform(canvas.width / w, 0, 0, canvas.height / h, 0, 0);
+  const px = w / canvas.width;
+  c.lineWidth = 1.5 * px * (devicePixelRatio || 1); c.setLineDash([4 * px * (devicePixelRatio || 1), 3 * px * (devicePixelRatio || 1)]);
+  c.strokeStyle = '#1a56c4';
+  if (lasso.length > 1) {
+    c.beginPath(); lasso.forEach(([x, y], i) => i ? c.lineTo(x, y) : c.moveTo(x, y)); c.stroke();
+  }
+  if (!selection) return;
+  const [dx, dy] = moveBy;
+  if (moveFrom) for (const id of selection.ids) { c.fillStyle = inkColour(M._fs_meta(id, 1)); c.fill(outlinePath(id, dx, dy)); }
+  const [x0, y0, x1, y1] = selection.bounds;
+  c.fillStyle = '#1a56c40f'; c.fillRect(x0 + dx, y0 + dy, x1 - x0, y1 - y0);
+  c.strokeRect(x0 + dx, y0 + dy, x1 - x0, y1 - y0);
+}
+function finishLasso() {
+  const page = M._fs_current(), ids = [];
+  if (lasso.length > 2) for (let id = 1; id <= M._fs_count(); id++) {
+    if (!M._fs_visible(id) || M._fs_stroke_page(id) !== page || !M._fs_size(id)) continue;
+    const r = raw(id); let hits = 0;
+    for (let i = 0; i < r.length; i += 4) if (inside(lasso, r[i], r[i + 1])) hits++;
+    if (hits * 4 >= r.length * 0.6) ids.push(id);
+  }
+  lasso = [];
+  selection = ids.length ? { ids, bounds: selectionBounds(ids) } : null;
+  drawOverlay();
+}
+function finishMove() {
+  const [dx, dy] = moveBy, moved = [];
+  moveFrom = null; moveBy = [0, 0];
+  if (Math.hypot(dx, dy) > 0.05) {
+    M._fs_group(1);
+    for (const id of selection.ids) {
+      const copy = M._fs_copy(id, dx, dy);
+      if (!copy) continue;
+      strokeGeometry.set(copy, geometry(id)); M._fs_toggle(id);
+      checkpoint(id, true); checkpoint(copy, true); moved.push(copy);
+    }
+    M._fs_group(0);
+    selection = { ids: moved, bounds: selectionBounds(moved) };
+  }
+  redrawCommitted(); drawOverlay(); refreshControls();
+}
+function deleteSelection() {
+  if (!selection || current) return;
+  M._fs_group(1);
+  for (const id of selection.ids) if (M._fs_visible(id)) { M._fs_toggle(id); checkpoint(id, true); }
+  M._fs_group(0);
+  selection = null; redrawCommitted(); drawOverlay(); refreshControls();
 }
 
 function scrollInk() {
@@ -352,6 +472,10 @@ async function restore(s) {
     saved.set(id, offset); expected++;
   }
   M._fs_page(s.meta.current || 1);
+  if (s.meta.pen) {
+    M._fs_tool(s.meta.pen.tool | 0); M._fs_colour(s.meta.pen.colour | 0);
+    if (Number.isFinite(s.meta.pen.width)) M._fs_width(s.meta.pen.width);
+  }
   $('title').value = String(s.meta.title || 'Untitled notebook');
   if (pdf) await pdf.destroy();
   pdf = nextPDF; pdfBytes = s.pdf || null; pdfPages = nextPDF?.numPages || 0;
@@ -408,7 +532,8 @@ async function exportDocument() {
 globalThis.fortshellHost = (action, id) => {
   if (!ready) return;
   if (action === 1) { metaChanged(); void requestPage(); }
-  if (action === 2 && id) { checkpoint(id, true); void requestPage(); }
+  if (action === 2 && id) { clearSelection(); checkpointPage(M._fs_stroke_page(id)); void requestPage(); }
+  if (action === 1) clearSelection();
   if (action === 4) void exportDocument().catch(error);
   if (action === 5) void exportNotebook().catch(error);
 };
@@ -428,9 +553,56 @@ async function boot() {
   for (const type of ['click', 'input', 'change']) {
     $('controls').addEventListener(type, () => { controlsDirty = true; }, true);
   }
-  for (const type of ['pointerdown', 'pointermove', 'pointerrawupdate', 'pointerup']) {
+  // Fingers never write: one finger scrolls, two pinch to zoom about their
+  // midpoint. The page scales visually during the gesture and is rendered at
+  // the new zoom when it ends.
+  const touches = new Map();
+  let pinch = null;
+  const touchGesture = event => {
+    const ws = $('workspace');
+    if (event.type === 'pointerdown') touches.set(event.pointerId, [event.clientX, event.clientY]);
+    else if (!touches.has(event.pointerId)) return;
+    const before = touches.get(event.pointerId);
+    if (event.type === 'pointermove') touches.set(event.pointerId, [event.clientX, event.clientY]);
+    const list = [...touches.values()];
+    if (list.length >= 2) {
+      const [a, b] = list, distance = Math.hypot(a[0] - b[0], a[1] - b[1]);
+      const mid = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+      if (!pinch) {
+        const rect = $('paper').getBoundingClientRect();
+        pinch = { distance, mid, scale: 1, origin: [mid[0] - rect.left, mid[1] - rect.top], start: mid };
+        $('paper').style.transformOrigin = `${pinch.origin[0]}px ${pinch.origin[1]}px`;
+      }
+      pinch.scale = Math.max(0.5 / zoom, Math.min(4 / zoom, distance / pinch.distance));
+      pinch.mid = mid;
+      $('paper').style.transform = `translate(${mid[0] - pinch.start[0]}px, ${mid[1] - pinch.start[1]}px) scale(${pinch.scale})`;
+    } else if (event.type === 'pointermove' && !pinch && before) {
+      ws.scrollLeft -= event.clientX - before[0]; ws.scrollTop -= event.clientY - before[1];
+    }
+    if (event.type === 'pointerup' || event.type === 'pointercancel') {
+      touches.delete(event.pointerId);
+      if (pinch && touches.size < 2) {
+        const done = pinch; pinch = null;
+        const rect = $('paper').getBoundingClientRect();
+        const fx = (done.mid[0] - rect.left) / rect.width, fy = (done.mid[1] - rect.top) / rect.height;
+        $('paper').style.transform = ''; $('paper').style.transformOrigin = '';
+        if (current) return;
+        zoom = Math.max(0.5, Math.min(4, zoom * done.scale));
+        void requestPage().then(() => {
+          // Keep the page point under the fingers where it was.
+          const r = $('paper').getBoundingClientRect();
+          ws.scrollLeft += r.left + fx * r.width - done.mid[0];
+          ws.scrollTop += r.top + fy * r.height - done.mid[1];
+        });
+      }
+    }
+  };
+  for (const type of ['pointerdown', 'pointermove', 'pointerrawupdate', 'pointerup', 'pointercancel']) {
     $('workspace').addEventListener(type, event => {
-      if (event.pointerType === 'touch') { event.preventDefault(); event.stopImmediatePropagation(); }
+      if (event.pointerType === 'touch') {
+        event.preventDefault(); event.stopImmediatePropagation();
+        if (type !== 'pointerrawupdate') touchGesture(event);
+      }
     }, { capture: true, passive: false });
   }
   for (const type of ['touchstart', 'touchmove', 'selectstart', 'contextmenu', 'dragstart']) {
@@ -453,11 +625,14 @@ async function boot() {
     if (!ready || operation) return;
     if (current) endStroke(false);
     const page = M._fs_current();
+    clearSelection();
+    M._fs_group(1);
     for (let id = 1; id <= M._fs_count(); id++) {
       if (M._fs_visible(id) && M._fs_stroke_page(id) === page) {
         M._fs_toggle(id); checkpoint(id, true);
       }
     }
+    M._fs_group(0);
     redrawCommitted(); refreshControls();
   };
   $('compare-toggle').onclick = () => {
@@ -543,6 +718,7 @@ async function boot() {
   document.addEventListener('keydown', e => {
     if (e.defaultPrevented || e.isComposing || e.ctrlKey || e.metaKey || e.altKey
         || e.target.closest('input,textarea,select,button,[contenteditable]')) return;
+    if ((e.key === 'Delete' || e.key === 'Backspace') && selection) { e.preventDefault(); deleteSelection(); return; }
     if (e.key.length === 1) {
       e.preventDefault(); $('prompt').hidden = false; $('prompt-text').focus(); $('prompt-text').value += e.key;
     }
@@ -554,8 +730,8 @@ async function boot() {
     const value = $('prompt-text').value.trim().toLowerCase();
     if (value === 'next') M._fs_next();
     else if (value === 'previous') M._fs_previous();
-    else if (value === 'undo') { const id = M._fs_undo(); if (id) checkpoint(id, true); }
-    else if (value === 'redo') { const id = M._fs_redo(); if (id) checkpoint(id, true); }
+    else if (value === 'undo') { const id = M._fs_undo(); if (id) checkpointPage(M._fs_stroke_page(id)); }
+    else if (value === 'redo') { const id = M._fs_redo(); if (id) checkpointPage(M._fs_stroke_page(id)); }
     else if (value === 'pdf') void exportDocument().catch(error);
     else { error(new Error('Available commands: next, previous, undo, redo, pdf.')); return; }
     $('prompt-text').value = ''; $('prompt').hidden = true; $('workspace').focus();

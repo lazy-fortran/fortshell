@@ -7,9 +7,11 @@ A browser ink notebook with a Fortran document model and
 
 Write on an A4 landscape page, advance past the final page to create another,
 annotate a PDF, or export a vector PDF and an editable `.fortshell` notebook.
-Undo, redo, stroke erasing, pressure, zoom, and immediate keyboard command
-entry are available. Pens and mice write. Touches on the page are ignored
-to prevent palm gestures. Use the page and zoom controls for navigation.
+Undo, redo, stroke erasing, a lasso that selects strokes to move or delete,
+pressure, zoom, and immediate keyboard command entry are available. Pens and
+mice write. Fingers never write: one finger scrolls and two pinch to zoom.
+Clearing a page, moving and deleting a selection each undo in one step. Pen,
+colour and width are kept with the notebook.
 The default black pen is 1.5 mm. Six pen colours are available, and ink that
 leaves the page is clipped at its edge. Before tapering, pressure sets the width
 between 18 and 100 percent of the selected size. An isolated tap has a
