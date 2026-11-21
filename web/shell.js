@@ -594,8 +594,10 @@ async function switchTo(ctx, within = false) {
   void store.flush().catch(error);
   show(ctx);
   if (!ctx.loaded || ctx.stale) {
-    const s = await store.read();
+    let s = await store.read();
     ctx.loaded = true; ctx.stale = false;
+    // A document known only to the server arrives before an empty one is written.
+    if (!s.meta && !within && store.sync) { await store.sync.start().catch(error); s = await store.read(); }
     // A file operation fills a new document itself, without an empty page first.
     if (s.meta) await restore(s); else if (!within) { await requestPage(); metaChanged(); }
     void store.sync?.start().catch(error);

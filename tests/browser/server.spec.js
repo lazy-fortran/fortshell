@@ -4,6 +4,7 @@ import { mkdtemp, rm, access } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createServer } from 'node:net';
+import { decodeLog } from '../../web/sync.js';
 
 // Ink against the Fortran server: saved there, seen by a second device, and
 // sent after the network returns. Needs `fo build` and `npm run build:web`.
@@ -66,6 +67,37 @@ test('ink is saved on the server, reaches a second device and survives going off
   await other.goto(`${origin}/#login=${token}`);
   await other.waitForFunction(() => window.fortshell?.ready);
   await expect.poll(() => strokes(other)).toBe(await strokes(page));
+
+  // A document made on the tablet appears on the desk after a reload, and
+  // opening it there writes nothing of its own over it.
+  const shown = () => page.evaluate(() => window.fortshell.pageRevision);
+  let r = await shown();
+  await page.locator('[data-id=document-new]').click();
+  await page.waitForFunction(r => window.fortshell.pageRevision > r, r);
+  await draw(page);
+  await page.evaluate(() => window.fortshell.flush());
+  await expect(status(page)).toHaveText('Saved', { timeout: 10000 });
+  await other.reload(); await other.waitForFunction(() => window.fortshell?.ready);
+  await expect.poll(() => other.evaluate(async () => Object.keys((await (await fetch('/api/docs')).json()).docs).length)).toBe(2);
+  await other.reload(); await other.waitForFunction(() => window.fortshell?.ready);
+  r = await other.evaluate(() => window.fortshell.pageRevision);
+  await other.locator('[data-id=document-next]').click();
+  await other.waitForFunction(r => window.fortshell.pageRevision > r, r);
+  await expect.poll(() => strokes(other)).toBe(1);
+  await other.evaluate(() => window.fortshell.flush());
+  const logs = await other.evaluate(async () => {
+    const { docs } = await (await fetch('/api/docs')).json(), out = {};
+    for (const id of Object.keys(docs)) out[id] = [...new Uint8Array(await (await fetch(`/api/docs/${id}?from=0`)).arrayBuffer())];
+    return out;
+  });
+  const made = Object.keys(logs).find(id => id !== 'notebook');
+  expect(new Set(decodeLog(Uint8Array.from(logs[made])).batches.map(b => b.client)).size).toBe(1);
+  r = await shown();
+  await page.locator('[data-id=document-previous]').click();
+  await page.waitForFunction(r => window.fortshell.pageRevision > r, r);
+  r = await other.evaluate(() => window.fortshell.pageRevision);
+  await other.locator('[data-id=document-previous]').click();
+  await other.waitForFunction(r => window.fortshell.pageRevision > r, r);
 
   // Ink written offline waits in the outbox and arrives once the network returns.
   await tablet.setOffline(true);

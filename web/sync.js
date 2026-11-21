@@ -86,6 +86,9 @@ export function decodeBatches(batches, assembling = new Map()) {
   return { writes, clear };
 }
 
+let events = null;
+const listeners = new Set(), syncs = new Set();
+
 export class ServerSync {
   constructor(db, state, { status, apply, idle, resend }) {
     Object.assign(this, { db, state, status, apply, idle, resend });
@@ -111,6 +114,11 @@ export class ServerSync {
   }
   committed(next) { this.state.next = next; this.kick(); }
   async start() {
+    if (this.started || this.starting) return this.starting;
+    this.starting = this.begin().finally(() => { this.starting = null; });
+    return this.starting;
+  }
+  async begin() {
     const login = new URLSearchParams(location.hash.slice(1)).get('login');
     if (login) {
       history.replaceState(null, '', location.pathname + location.search);
@@ -165,12 +173,16 @@ export class ServerSync {
   }
   async pending() { return this.db.call('count', 'outbox'); }
   follow() {
-    const events = new EventSource('/api/events');
-    events.addEventListener('doc', event => {
-      const { id, size } = JSON.parse(event.data);
+    // One stream per page serves every open document: each holds a server process.
+    if (!events) {
+      events = new EventSource('/api/events');
+      events.addEventListener('doc', event => { for (const listener of listeners) listener(JSON.parse(event.data)); });
+      events.onerror = () => { for (const sync of syncs) sync.kick(); };
+    }
+    syncs.add(this);
+    listeners.add(({ id, size }) => {
       if (id === this.state.doc && size > this.state.offset) void this.pull().catch(() => {});
     });
-    events.onerror = () => this.kick();
   }
   // Applies batches of other devices; our own are already local.
   async pull() {
