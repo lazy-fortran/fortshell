@@ -4,9 +4,16 @@ license = "MIT"
 author = "Christopher Albert"
 [build]
 auto-tests = true
+auto-executables = false
 [dependencies]
+fortweb = { git = "https://github.com/lazy-fortran/fortweb.git", rev = "e3a0db9ce3e2b55fb90f623ea7ecfa91474fb93e" }
 fortink = { git = "https://github.com/lazy-fortran/fortink.git", rev = "1a61e4ddd9835355f51c47db69642a7145be4f83" }
 [fortran]
 implicit-typing = false
 implicit-external = false
 source-form = "free"
+
+[[executable]]
+name = "fortshell"
+source-dir = "app"
+main = "fortshell.f90"
