@@ -1,3 +1,13 @@
+import { ServerSync } from './sync.js';
+
+export function snapshotWrites(s) {
+  const writes = [{ store: 'meta', key: 'notebook', value: s.meta }];
+  for (const stroke of s.strokes) writes.push({ store: 'strokes', key: stroke.id, value: stroke });
+  for (const chunk of s.chunks) writes.push({ store: 'chunks', key: chunk.key, value: chunk.data });
+  if (s.pdf) writes.push({ store: 'assets', key: 'pdf', value: s.pdf });
+  return writes;
+}
+
 class StorageWorker {
   constructor() {
     this.worker = new Worker(new URL('./storage-worker.js', import.meta.url), { type: 'module' });
@@ -43,11 +53,24 @@ export class NotebookStore {
     this.db = db; this.status = status; this.pending = new Map();
     this.writes = 0; this.bytes = 0; this.transactions = 0;
   }
-  static async open(status) {
+  static async open(status, server) {
     await acquireWriter();
     const db = new StorageWorker();
     await db.call('open');
-    return new NotebookStore(db, status);
+    const store = new NotebookStore(db, status);
+    if (server) {
+      store.sync = await ServerSync.open(db, { ...server, status: () => void store.report() });
+    }
+    return store;
+  }
+  // Local state first; the server state once local writes are done.
+  async report() {
+    if (this.pending.size || this.running) return;
+    const sync = this.sync;
+    if (!sync || sync.disabled) { this.status('Saved locally'); return; }
+    if (sync.signedOut) { this.status('Saved locally. Sign in to save on the server.'); return; }
+    const waiting = await sync.pending();
+    this.status(waiting ? `Saved locally, ${waiting} waiting for the server` : 'Saved');
   }
   put(store, key, value) {
     this.pending.set(`${store}:${JSON.stringify(key)}`, { store, key, value });
@@ -61,10 +84,12 @@ export class NotebookStore {
     const batch = this.pending; this.pending = new Map();
     this.running = (async () => {
       try {
-        await this.db.call('write', [...batch.values()]);
+        const writes = [...batch.values()], outbox = this.sync?.entries(writes);
+        await this.db.call('write', outbox ? [...writes, ...outbox.entries] : writes);
+        if (outbox) this.sync.committed(outbox.next);
         this.writes += batch.size; this.transactions++;
         for (const x of batch.values()) this.bytes += x.value?.byteLength || 0;
-        this.status(this.pending.size ? 'Saving...' : 'Saved locally');
+        if (this.pending.size) this.status('Saving...');
       } catch (error) {
         for (const [key, value] of batch) if (!this.pending.has(key)) this.pending.set(key, value);
         this.status(`Save failed: ${error.message}. Keep this tab open and download Notebook.`);
@@ -72,12 +97,21 @@ export class NotebookStore {
       }
     })();
     try { await this.running; } finally { this.running = null; }
+    if (!this.pending.size) void this.report();
   }
   async read() {
     return this.db.call('read');
   }
   async replace(snapshot) {
     await this.flush();
-    await this.db.call('replace', snapshot); this.status('Saved locally');
+    const outbox = this.sync?.entries(snapshotWrites(snapshot), true);
+    await this.db.call('replace', { ...snapshot, extra: outbox?.entries || [] });
+    if (outbox) this.sync.committed(outbox.next);
+    void this.report();
+  }
+  // Writes from another device, with the sync state, in one transaction.
+  async applyRemote(writes, clear, state) {
+    await this.flush();
+    await this.db.call('apply', { writes: [...writes, state], clear });
   }
 }

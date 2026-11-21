@@ -544,12 +544,26 @@ async function boot() {
   store = await NotebookStore.open(message => {
     if ($('save-status').textContent !== message) $('save-status').textContent = message;
     $('save-status').title = message;
+  }, {
+    // Another device's writes reload the notebook once no stroke or file
+    // operation is in progress.
+    idle: async () => { while (current || operation) await wait(50); },
+    apply: async (writes, clear, state) => {
+      await store.applyRemote(writes, clear, state);
+      const s = await store.read();
+      if (s.meta) await restore(s);
+    },
+    resend: () => store.replace(snapshot()),
   });
   const s = await store.read();
   if (s.meta) await restore(s); else await requestPage();
+  // A new device takes the server's notebook before writing its own empty one.
+  let fresh = !s.meta;
+  if (fresh) { await store.sync?.start().catch(error); fresh = !(await store.read()).meta; }
   ready = true;
   $('save-status').textContent = 'Saved locally';
-  if (!s.meta) metaChanged();
+  if (fresh) metaChanged();
+  if (s.meta) void store.sync?.start().catch(error);
   for (const type of ['click', 'input', 'change']) {
     $('controls').addEventListener(type, () => { controlsDirty = true; }, true);
   }

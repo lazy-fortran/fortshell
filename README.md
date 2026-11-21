@@ -116,12 +116,24 @@ parity with a native notebook application.
 
 ## Hosting
 
-`sh tools/deploy.sh` installs the built `build/web` directory on the existing
-web host, validates nginx, and provisions HTTPS with its existing Certbot.
-`FORTSHELL_SSH_TARGET` selects the SSH destination. DNS for `ink.sloppy.at`
-must already point to that host. Deployment retains the previous release.
-The host serves static application files. Notebook contents stay in browser
-storage until the user downloads them.
+`tools/build-server.sh` builds the server for the Debian host in a Debian 13
+container, with the Fortran runtime linked statically. `sh tools/deploy.sh`
+then installs it with the built `build/web` directory, runs it as the
+`fortshell` user under systemd, validates nginx, and provisions HTTPS with the
+existing Certbot. `FORTSHELL_SSH_TARGET` selects the SSH destination. DNS for
+`ink.sloppy.at` must already point to that host. Deployment retains the
+previous release of the application and of the server.
+
+`fortshell serve`, built on [fortweb](https://code.tugraz.at/yard/fortweb),
+answers every request behind nginx: the application files and the document
+API below `/api`. Documents live in `/srv/fortshell/data`. The first
+deployment writes the login token to `/root/fortshell-login-token`. Opening
+`https://ink.sloppy.at/#login=TOKEN` once signs a browser in for a year.
+
+```sh
+fortshell init --data DIR        # prints a new login token
+fortshell serve --data DIR --web build/web --listen 127.0.0.1:4180
+```
 
 ## Saving
 
@@ -133,8 +145,18 @@ pending data and show a retry message. Original PDF bytes are stored once.
 An exclusive browser lock prevents another tab from overwriting the same
 working notebook. A second tab opens after the first closes and it is reloaded.
 
-The status indicator acknowledges completed browser database transactions.
-Browser storage remains subject to platform eviction. Download **Notebook**
+Every local write also enters an outbox in the same database transaction.
+Outbox batches go to the server in order and leave the outbox only after the
+server has written them to disk, so offline ink goes up once the network
+returns. The server keeps an append-only log per notebook and ignores a
+repeated batch. A signed-in browser on another device loads the notebook from
+the server and follows its changes. Writes to the same item resolve in favour
+of the later write.
+
+The status indicator shows **Saved** once the server holds everything,
+**Saved locally** with the number of batches waiting for the server otherwise,
+and a sign-in note for a browser without a session. Browser storage alone
+remains subject to platform eviction. Download **Notebook**
 for a portable editable copy. Opening material replaces the current working
 notebook. Export the current notebook before opening another.
 

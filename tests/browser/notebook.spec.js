@@ -318,7 +318,8 @@ test('installed notebook reloads offline with its saved ink', async ({ browser }
     expect(await darkPixels(page)).toBeGreaterThan(100);
     await page.locator('[data-id=next]').click();
     await expect(page.locator('[data-id=page-count]')).toHaveText('2 / 2');
-    const failed = []; page.on('requestfailed', request => failed.push(request.url()));
+    // Server saving fails offline by design and retries; the application must not.
+    const failed = []; page.on('requestfailed', request => { if (!new URL(request.url()).pathname.startsWith('/api/')) failed.push(request.url()); });
     const revision = await page.evaluate(() => window.fortshell.pageRevision);
     await page.locator('#file').setInputFiles({ name: 'offline.pdf', mimeType: 'application/pdf', buffer: Buffer.from(await pdf.save()) });
     await page.waitForFunction(r => window.fortshell.pageRevision > r && !window.fortshell.busy, revision);

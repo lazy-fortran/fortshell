@@ -43,7 +43,7 @@ self.addEventListener('activate',e=>e.waitUntil((async()=>{
   await Promise.all(previous.slice(0,-1).map(k=>caches.delete(k)));
   await self.clients.claim();
 })()));
-self.addEventListener('fetch',e=>{if(e.request.method==='GET'&&new URL(e.request.url).origin===location.origin)e.respondWith((async()=>{
+self.addEventListener('fetch',e=>{const u=new URL(e.request.url);if(e.request.method==='GET'&&u.origin===location.origin&&!u.pathname.startsWith('/api/'))e.respondWith((async()=>{
   const c=await caches.open(CACHE), hit=await c.match(e.request);if(hit)return hit;
   if(e.request.mode==='navigate'){const home=await c.match(new URL('./index.html',self.registration.scope));if(home)return home;}
   const previous=await caches.match(e.request);if(previous)return previous;

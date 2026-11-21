@@ -1,0 +1,19 @@
+[Unit]
+Description=FortShell server
+After=network.target
+
+[Service]
+User=fortshell
+Group=fortshell
+ExecStart=/srv/fortshell/server/current/fortshell serve --data /srv/fortshell/data --web /srv/fortshell/current --listen 127.0.0.1:4180 --processes 8
+Restart=always
+RestartSec=1
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/srv/fortshell/data
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
