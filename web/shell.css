@@ -89,3 +89,7 @@ select { border-color: var(--line); background: white; }
   button, summary { min-height: 40px; }
 }
 @media print { header, #compare, #prompt, #error { display: none; } }
+
+/* Presenting: no chrome, the page on black, filling the screen. */
+body.presenting header { display: none; }
+body.presenting #workspace { padding: 0; background: #000; display: grid; place-items: center; }

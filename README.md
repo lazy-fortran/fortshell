@@ -9,6 +9,10 @@ Several documents stay open at once, for example a deck and a whiteboard per
 course. **Doc <** and **Doc >** or Shift+Left and Shift+Right switch between
 them without loading, and **New doc** starts another. Opening a file starts a
 new document unless the shown one is empty.
+**Present** hides every control and fits the page to the screen, on black.
+The pen still writes, a short horizontal finger swipe turns the page and a
+swipe held over 0.6 s changes the document. Escape or a tap on the top edge
+brings the controls back.
 Write on an A4 landscape page, advance past the final page to create another,
 insert a blank page after the shown one, for example between slides of a deck,
 annotate a PDF, or export a vector PDF and an editable `.fortshell` notebook.

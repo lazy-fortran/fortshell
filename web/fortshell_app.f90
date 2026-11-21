@@ -67,6 +67,7 @@ contains
         if (button('document-new','New doc')) call host_action(7,0)
         if (button('document-next','Doc >')) call host_action(8,1)
         if (button('import','Open')) call host_action(3,0)
+        if (button('present','Present')) call host_action(9,0)
         if (button('export','PDF')) call host_action(4,0)
         if (button('backup','Save')) call host_action(5,0)
         call row_end()

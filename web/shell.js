@@ -92,9 +92,11 @@ async function renderPage() {
   const generation = ++renderGeneration, page = M._fs_current(), [width, height] = pageSize();
   surface?.dispose(); surface = null;
   committed?.dispose(); activeRenderer?.dispose();
-  const available = Math.max(120, $('workspace').clientWidth - 48);
-  const availableHeight = Math.max(100, $('workspace').clientHeight - 48);
-  const cssWidth = Math.min(1400, available, availableHeight * width / height) * zoom;
+  // Presenting, the page fills the screen; otherwise it keeps a margin.
+  const presenting = document.body.classList.contains('presenting'), margin = presenting ? 0 : 48;
+  const available = Math.max(120, $('workspace').clientWidth - margin);
+  const availableHeight = Math.max(100, $('workspace').clientHeight - margin);
+  const cssWidth = Math.min(presenting ? Infinity : 1400, available, availableHeight * width / height) * zoom;
   const cssHeight = cssWidth * height / width;
   $('paper').style.width = `${cssWidth}px`; $('paper').style.height = `${cssHeight}px`;
   $('paper').setAttribute('aria-label', `Page ${page}`);
@@ -566,6 +568,13 @@ async function openDocument(entry) {
   documents.push(ctx);
   return ctx;
 }
+// Presenting hides every control; the page fills the screen and the pen
+// still writes. Escape or a tap on the top edge ends it.
+function present(on) {
+  document.body.classList.toggle('presenting', on);
+  zoom = 1;
+  void requestPage();
+}
 const flushAll = () => Promise.all(documents.map(d => d.store.flush()));
 // Swaps the shown document's state with `ctx` without touching storage.
 function show(ctx) {
@@ -623,6 +632,7 @@ globalThis.fortshellHost = (action, id) => {
   if (!ready) return;
   if (action === 1) { metaChanged(); void requestPage(); }
   if (action === 7) void newDocument().catch(error);
+  if (action === 9) present(true);
   if (action === 8) void cycle(id).catch(error);
   if (action === 6 && id) {
     // A blank page before page `id`: later pages and their ink move back.
@@ -663,7 +673,8 @@ async function boot() {
   // midpoint. The page scales visually during the gesture and is rendered at
   // the new zoom when it ends.
   const touches = new Map();
-  let pinch = null;
+  let pinch = null, swipe = null;
+  const presentingFit = () => document.body.classList.contains('presenting') && zoom === 1;
   const touchGesture = event => {
     const ws = $('workspace');
     if (event.type === 'pointerdown') touches.set(event.pointerId, [event.clientX, event.clientY]);
@@ -682,8 +693,22 @@ async function boot() {
       pinch.scale = Math.max(0.5 / zoom, Math.min(4 / zoom, distance / pinch.distance));
       pinch.mid = mid;
       $('paper').style.transform = `translate(${mid[0] - pinch.start[0]}px, ${mid[1] - pinch.start[1]}px) scale(${pinch.scale})`;
-    } else if (event.type === 'pointermove' && !pinch && before) {
+    } else if (event.type === 'pointermove' && !pinch && before && !swipe) {
       ws.scrollLeft -= event.clientX - before[0]; ws.scrollTop -= event.clientY - before[1];
+    }
+    if (event.type === 'pointerdown' && touches.size === 1 && presentingFit())
+      swipe = { x: event.clientX, y: event.clientY, t: event.timeStamp };
+    if (touches.size > 1) swipe = null;
+    if ((event.type === 'pointerup' || event.type === 'pointercancel') && swipe) {
+      const dx = event.clientX - swipe.x, dy = event.clientY - swipe.y, held = event.timeStamp - swipe.t;
+      const start = swipe; swipe = null;
+      // A tap on the top edge brings the controls back.
+      if (Math.hypot(dx, dy) < 10 && start.y < 32) present(false);
+      // A short horizontal swipe turns the page; a held one changes the document.
+      else if (event.type === 'pointerup' && Math.abs(dx) > 60 && Math.abs(dx) > 2 * Math.abs(dy)) {
+        if (held > 600) void cycle(dx < 0 ? 1 : -1).catch(error);
+        else { if (dx < 0) M._fs_next(); else M._fs_previous(); metaChanged(); void requestPage(); refreshControls(); }
+      }
     }
     if (event.type === 'pointerup' || event.type === 'pointercancel') {
       touches.delete(event.pointerId);
@@ -827,7 +852,10 @@ async function boot() {
     if ((e.key === 'Delete' || e.key === 'Backspace') && selection) { e.preventDefault(); deleteSelection(); return; }
     // The field receives the key itself, so dead keys and input methods compose there.
     if (e.key.length === 1 || e.key === 'Dead') { $('prompt').hidden = false; $('prompt-text').focus(); }
-    if (e.key === 'Escape') $('prompt').hidden = true;
+    if (e.key === 'Escape') {
+      if ($('prompt').hidden && document.body.classList.contains('presenting')) present(false);
+      $('prompt').hidden = true;
+    }
   });
   $('prompt-close').onclick = () => { $('prompt').hidden = true; $('workspace').focus(); };
   $('prompt').onsubmit = e => {
@@ -838,7 +866,8 @@ async function boot() {
     else if (value === 'undo') { const id = M._fs_undo(); if (id) checkpointPage(M._fs_stroke_page(id)); }
     else if (value === 'redo') { const id = M._fs_redo(); if (id) checkpointPage(M._fs_stroke_page(id)); }
     else if (value === 'pdf') void exportDocument().catch(error);
-    else { error(new Error('Available commands: next, previous, undo, redo, pdf.')); return; }
+    else if (value === 'present') present(true);
+    else { error(new Error('Available commands: next, previous, undo, redo, pdf, present.')); return; }
     $('prompt-text').value = ''; $('prompt').hidden = true; $('workspace').focus();
     refreshControls(); metaChanged(); void requestPage();
   };
@@ -853,7 +882,7 @@ async function boot() {
   };
   $('results-download').onclick = () => download(JSON.stringify(results, null, 2), 'fortshell-benchmark.json', 'application/json');
   globalThis.fortshell = { module: M, store, snapshot, restore, requestPage, exportDocument, exportNotebook,
-    importFile, flush: () => flushAll(), get ready() { return ready; }, get pageRevision() { return pageRevision; },
+    importFile, flush: () => flushAll(), present, get ready() { return ready; }, get pageRevision() { return pageRevision; },
     get busy() { return !!operation || !surface; },
     latencyReport: () => profiler?.report() || latencyResults,
     get engine() { return engine; }, get renderer() { return renderer; } };

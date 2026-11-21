@@ -520,6 +520,43 @@ test('documents stay open, switch without loading and survive a reload', async (
   expect(await count()).toBe(2);
 });
 
+test('presenting hides the controls, fills the screen, writes and swipes', async ({ page }) => {
+  const revision = () => page.evaluate(() => window.fortshell.pageRevision);
+  const after = async act => { const r = await revision(); await act(); await page.waitForFunction(r => window.fortshell.pageRevision > r, r); };
+  const swipe = (dx, held = 0, y = 0.5) => page.evaluate(async ({ dx, held, y }) => {
+    const ws = document.getElementById('workspace'), x = innerWidth / 2, py = innerHeight * y;
+    const send = (type, px) => ws.dispatchEvent(new PointerEvent(type, { pointerId: 7, pointerType: 'touch',
+      clientX: px, clientY: py, bubbles: true, cancelable: true, isPrimary: true }));
+    send('pointerdown', x);
+    if (held) await new Promise(r => setTimeout(r, held));
+    for (let i = 1; i <= 5; i++) send('pointermove', x + dx * i / 5);
+    send('pointerup', x + dx);
+  }, { dx, held, y });
+  await open(page);
+  await after(() => page.locator('[data-id=document-new]').click());
+  await after(() => page.locator('[data-id=document-previous]').click());
+  await after(() => page.locator('[data-id=next]').click());
+  await after(() => page.locator('[data-id=previous]').click());
+  await after(() => page.locator('[data-id=present]').click());
+  await expect(page.locator('header')).toBeHidden();
+  const box = await page.locator('#paper').boundingBox(), view = page.viewportSize();
+  expect(Math.min(view.width - box.width, view.height - box.height)).toBeLessThan(2);
+  await draw(page);
+  expect(await page.evaluate(() => window.fortshell.module._fs_count())).toBe(1);
+  await after(() => swipe(-200));
+  expect(await page.evaluate(() => window.fortshell.module._fs_current())).toBe(2);
+  await after(() => swipe(200));
+  expect(await page.evaluate(() => window.fortshell.module._fs_current())).toBe(1);
+  await after(() => swipe(-200, 700));
+  expect(await page.evaluate(() => window.fortshell.module._fs_count())).toBe(0);
+  await after(() => swipe(0, 0, 0.01));
+  await expect(page.locator('header')).toBeVisible();
+  await after(() => page.evaluate(() => window.fortshell.present(true)));
+  await page.locator('#workspace').focus();
+  await after(() => page.keyboard.press('Escape'));
+  await expect(page.locator('header')).toBeVisible();
+});
+
 test('language parity and coalesced batch sizes', async ({ page }) => {
   await open(page);
   const report = await page.evaluate(() => {
