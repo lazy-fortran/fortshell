@@ -485,6 +485,41 @@ test('a blank page inserted between deck pages moves later pages and their ink',
   expect(out.getPages().map(p => Math.round(p.getWidth()))).toEqual([600, 600, 500]);
 });
 
+test('documents stay open, switch without loading and survive a reload', async ({ page }) => {
+  const revision = () => page.evaluate(() => window.fortshell.pageRevision);
+  const after = async (act, ...args) => { const r = await revision(); await act(...args); await page.waitForFunction(r => window.fortshell.pageRevision > r, r); };
+  const count = () => page.evaluate(() => window.fortshell.module._fs_count());
+  await open(page); await draw(page);
+  await after(() => page.locator('[data-id=document-new]').click());
+  expect(await count()).toBe(0);
+  await page.locator('#title').fill('Whiteboard');
+  await draw(page); await draw(page);
+  const pdf = await PDFDocument.create(); pdf.addPage([600, 400]); pdf.addPage([600, 400]);
+  await page.locator('#file').setInputFiles({ name: 'deck.pdf', mimeType: 'application/pdf', buffer: Buffer.from(await pdf.save()) });
+  await page.waitForFunction(() => window.fortshell.snapshot().meta.sources?.[0] === 1);
+  await expect(page.locator('#title')).toHaveValue('deck');
+  expect(await count()).toBe(0);
+  const started = Date.now();
+  await after(() => page.keyboard.press('Shift+ArrowLeft'));
+  const elapsed = Date.now() - started;
+  await expect(page.locator('#title')).toHaveValue('Whiteboard');
+  expect(await count()).toBe(2);
+  await expect(page.locator('[data-id=page-count]')).toHaveText('1 / 1');
+  console.log(`document switch ${elapsed} ms`);
+  expect(elapsed).toBeLessThan(1000);
+  await after(() => page.keyboard.press('Shift+ArrowLeft'));
+  expect(await count()).toBe(1);
+  await after(() => page.keyboard.press('Shift+ArrowLeft'));
+  await expect(page.locator('#title')).toHaveValue('deck');
+  await expect(page.locator('[data-id=page-count]')).toHaveText('1 / 2');
+  await page.evaluate(() => window.fortshell.flush());
+  await page.reload(); await page.waitForFunction(() => window.fortshell?.ready);
+  expect(await count()).toBe(1);
+  await after(() => page.locator('[data-id=document-next]').click());
+  await expect(page.locator('#title')).toHaveValue('Whiteboard');
+  expect(await count()).toBe(2);
+});
+
 test('language parity and coalesced batch sizes', async ({ page }) => {
   await open(page);
   const report = await page.evaluate(() => {

@@ -10,7 +10,7 @@ const completion = tx => new Promise((resolve, reject) => {
 
 async function handle(action, value) {
   if (action === 'open') {
-    const req = indexedDB.open('fortshell-notebook', 2);
+    const req = indexedDB.open(value || 'fortshell-notebook', 2);
     req.onupgradeneeded = () => {
       for (const name of ['meta', 'strokes', 'chunks', 'assets', 'outbox', 'sync'])
         if (!req.result.objectStoreNames.contains(name)) req.result.createObjectStore(name);

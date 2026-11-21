@@ -63,12 +63,17 @@ contains
         call row_end()
 
         call row_begin(gap=2.0,look='group')
+        if (button('document-previous','Doc <')) call host_action(8,-1)
+        if (button('document-new','New doc')) call host_action(7,0)
+        if (button('document-next','Doc >')) call host_action(8,1)
         if (button('import','Open')) call host_action(3,0)
         if (button('export','PDF')) call host_action(4,0)
         if (button('backup','Save')) call host_action(5,0)
         call row_end()
 
         call row_end()
+        if (ui_shortcut('shift+ArrowRight')) call host_action(8,1)
+        if (ui_shortcut('shift+ArrowLeft')) call host_action(8,-1)
         if (ui_shortcut('ArrowRight')) call change_page(1)
         if (ui_shortcut('ArrowLeft')) call change_page(-1)
         if (ui_shortcut('mod+z')) then

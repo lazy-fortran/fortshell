@@ -36,10 +36,10 @@ class StorageWorker {
   }
 }
 
-async function acquireWriter() {
+async function acquireWriter(name) {
   if (!navigator.locks) throw new Error('This browser lacks notebook locking. Use a current Safari or Chromium browser.');
   await new Promise((resolve, reject) => {
-    navigator.locks.request('fortshell-notebook-writer', { ifAvailable: true }, lock => {
+    navigator.locks.request(`${name}-writer`, { ifAvailable: true }, lock => {
       if (!lock) { reject(new Error('This notebook is open in another tab. Close that tab and reload.')); return; }
       resolve();
       // The document lifetime owns this lock, without heartbeat disk writes.
@@ -53,13 +53,14 @@ export class NotebookStore {
     this.db = db; this.status = status; this.pending = new Map();
     this.writes = 0; this.bytes = 0; this.transactions = 0;
   }
-  static async open(status, server) {
-    await acquireWriter();
+  // `name` is the IndexedDB database of one document, `doc` its server id.
+  static async open(status, server, name = 'fortshell-notebook', doc = 'notebook') {
+    await acquireWriter(name);
     const db = new StorageWorker();
-    await db.call('open');
+    await db.call('open', name);
     const store = new NotebookStore(db, status);
     if (server) {
-      store.sync = await ServerSync.open(db, { ...server, status: () => void store.report() });
+      store.sync = await ServerSync.open(db, doc, { ...server, status: () => void store.report() });
     }
     return store;
   }
@@ -102,6 +103,9 @@ export class NotebookStore {
   async read() {
     return this.db.call('read');
   }
+  // Small values kept with the notebook, such as the list of documents.
+  async get(key) { return this.db.call('get', { store: 'sync', key }); }
+  async set(key, value) { return this.db.call('write', [{ store: 'sync', key, value }]); }
   async replace(snapshot) {
     await this.flush();
     const outbox = this.sync?.entries(snapshotWrites(snapshot), true);

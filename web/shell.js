@@ -20,7 +20,7 @@ let pdf = null, pdfBytes = null, pdfPages = 0, pageRevision = 0, zoom = 1, ready
 let sources = null;
 const source = page => sources ? sources[page - 1] || 0 : (page <= pdfPages ? page : 0);
 let renderGeneration = 0, changing = Promise.resolve(), imports = Promise.resolve();
-const saved = new Map(), strokeGeometry = new Map();
+let saved = new Map(), strokeGeometry = new Map();
 let eraserTargets = [], eraserContext;
 const geometry = id => strokeGeometry.get(id) ?? LEGACY_GEOMETRY;
 let operation = null, results;
@@ -509,6 +509,8 @@ async function importFile(file) {
         pdf: parsed.pdf ? Uint8Array.from(atob(parsed.pdf), c => c.charCodeAt(0)) : null };
     }
     validateSnapshot(s);
+    // Opened material gets its own document unless the shown one is empty.
+    if (M._fs_count() || pdf || M._fs_pages(0) > 1) await newDocument(true);
     await restore(s); await store.replace(s);
   } finally { operation = null; }
 }
@@ -535,9 +537,93 @@ async function exportDocument() {
   } finally { operation = null; }
 }
 
+// Open documents stay resident: each keeps its Fortran slot, database,
+// server sync, PDF and render state, so switching shows it without loading.
+const documents = [];
+let shown = null, listed = [];
+function statusFor(ctx) {
+  return message => {
+    ctx.status = message;
+    if (ctx !== shown) return;
+    if ($('save-status').textContent !== message) $('save-status').textContent = message;
+    $('save-status').title = message;
+  };
+}
+async function openDocument(entry) {
+  const ctx = { ...entry, slot: documents.length + 1, saved: new Map(), strokeGeometry: new Map(),
+    pdf: null, pdfBytes: null, pdfPages: 0, sources: null, title: 'Untitled notebook', loaded: false };
+  ctx.store = await NotebookStore.open(statusFor(ctx), {
+    // Another device's writes apply once no stroke or file operation runs.
+    idle: async () => { while (current || operation) await wait(50); },
+    apply: async (writes, clear, state) => {
+      await ctx.store.applyRemote(writes, clear, state);
+      if (ctx !== shown) { ctx.stale = true; return; }
+      const s = await store.read();
+      if (s.meta) await restore(s);
+    },
+    resend: async () => { const s = await ctx.store.read(); if (s.meta) await ctx.store.replace(s); },
+  }, entry.db, entry.id);
+  documents.push(ctx);
+  return ctx;
+}
+const flushAll = () => Promise.all(documents.map(d => d.store.flush()));
+// Swaps the shown document's state with `ctx` without touching storage.
+function show(ctx) {
+  if (shown) Object.assign(shown, { pdf, pdfBytes, pdfPages, sources, saved, strokeGeometry, title: $('title').value });
+  M._fs_select(ctx.slot);
+  ({ pdf, pdfBytes, pdfPages, sources, saved, strokeGeometry, store } = ctx);
+  $('title').value = ctx.title;
+  shown = ctx;
+  if (ctx.status) statusFor(ctx)(ctx.status);
+}
+async function switchTo(ctx, within = false) {
+  // `within` lets a file operation switch to the document it fills.
+  if (!within) while (operation) await wait(20);
+  if (ctx === shown) return;
+  if (current) endStroke(false);
+  clearSelection();
+  void store.flush().catch(error);
+  show(ctx);
+  if (!ctx.loaded || ctx.stale) {
+    const s = await store.read();
+    ctx.loaded = true; ctx.stale = false;
+    // A file operation fills a new document itself, without an empty page first.
+    if (s.meta) await restore(s); else if (!within) { await requestPage(); metaChanged(); }
+    void store.sync?.start().catch(error);
+  } else await requestPage();
+  refreshControls();
+}
+async function newDocument(within = false) {
+  const id = crypto.randomUUID(), entry = { id, db: `fortshell-doc-${id}` };
+  listed.push(entry);
+  await documents[0].store.set('documents', listed);
+  const ctx = await openDocument(entry);
+  await switchTo(ctx, within);
+  return ctx;
+}
+async function cycle(step) {
+  const k = listed.findIndex(e => e.id === shown.id), entry = listed[(k + step + listed.length) % listed.length];
+  const ctx = documents.find(d => d.id === entry.id) || await openDocument(entry);
+  await switchTo(ctx);
+}
+// Documents another device created appear in the list and load when shown.
+async function discover() {
+  const response = await fetch('/api/docs').catch(() => null);
+  if (!response?.ok) return;
+  const { docs } = await response.json();
+  let added = false;
+  for (const id of Object.keys(docs)) {
+    if (listed.some(e => e.id === id)) continue;
+    listed.push({ id, db: `fortshell-doc-${id}` }); added = true;
+  }
+  if (added) await documents[0].store.set('documents', listed);
+}
+
 globalThis.fortshellHost = (action, id) => {
   if (!ready) return;
   if (action === 1) { metaChanged(); void requestPage(); }
+  if (action === 7) void newDocument().catch(error);
+  if (action === 8) void cycle(id).catch(error);
   if (action === 6 && id) {
     // A blank page before page `id`: later pages and their ink move back.
     sources = Array.from({ length: M._fs_pages(0) - 1 }, (_, i) => source(i + 1));
@@ -554,22 +640,13 @@ globalThis.fortshellHost = (action, id) => {
 async function boot() {
   while (!globalThis.Module?._fs_count || !$('controls').querySelector('[data-id="next"]')) await wait(10);
   M = globalThis.Module;
-  store = await NotebookStore.open(message => {
-    if ($('save-status').textContent !== message) $('save-status').textContent = message;
-    $('save-status').title = message;
-  }, {
-    // Another device's writes reload the notebook once no stroke or file
-    // operation is in progress.
-    idle: async () => { while (current || operation) await wait(50); },
-    apply: async (writes, clear, state) => {
-      await store.applyRemote(writes, clear, state);
-      const s = await store.read();
-      if (s.meta) await restore(s);
-    },
-    resend: () => store.replace(snapshot()),
-  });
+  // The first document's database also lists the open documents.
+  const first = { id: 'notebook', db: 'fortshell-notebook' };
+  const home = await openDocument(first);
+  show(home);
   const s = await store.read();
   if (s.meta) await restore(s); else await requestPage();
+  home.loaded = true;
   // A new device takes the server's notebook before writing its own empty one.
   let fresh = !s.meta;
   if (fresh) { await store.sync?.start().catch(error); fresh = !(await store.read()).meta; }
@@ -577,6 +654,8 @@ async function boot() {
   $('save-status').textContent = 'Saved locally';
   if (fresh) metaChanged();
   if (s.meta) void store.sync?.start().catch(error);
+  listed = (await home.store.get('documents')) || [first];
+  void discover().catch(error);
   for (const type of ['click', 'input', 'change']) {
     $('controls').addEventListener(type, () => { controlsDirty = true; }, true);
   }
@@ -736,11 +815,11 @@ async function boot() {
     renderer = 'canvas'; $('renderer').value = renderer; void requestPage();
   });
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden) { if (current) endStroke(false); void store.flush().catch(error); }
+    if (document.hidden) { if (current) endStroke(false); void flushAll().catch(error); }
   });
-  window.addEventListener('pagehide', () => { if (current > 0) checkpoint(current); void store.flush().catch(error); });
+  window.addEventListener('pagehide', () => { if (current > 0) checkpoint(current); void flushAll().catch(error); });
   window.addEventListener('beforeunload', e => {
-    if (current || store.pending.size || store.running) { e.preventDefault(); e.returnValue = ''; }
+    if (current || documents.some(d => d.store.pending.size || d.store.running)) { e.preventDefault(); e.returnValue = ''; }
   });
   document.addEventListener('keydown', e => {
     if (e.defaultPrevented || e.isComposing || e.ctrlKey || e.metaKey || e.altKey
@@ -774,7 +853,7 @@ async function boot() {
   };
   $('results-download').onclick = () => download(JSON.stringify(results, null, 2), 'fortshell-benchmark.json', 'application/json');
   globalThis.fortshell = { module: M, store, snapshot, restore, requestPage, exportDocument, exportNotebook,
-    importFile, flush: () => store.flush(), get ready() { return ready; }, get pageRevision() { return pageRevision; },
+    importFile, flush: () => flushAll(), get ready() { return ready; }, get pageRevision() { return pageRevision; },
     get busy() { return !!operation || !surface; },
     latencyReport: () => profiler?.report() || latencyResults,
     get engine() { return engine; }, get renderer() { return renderer; } };
@@ -782,7 +861,7 @@ async function boot() {
     if (operation) return false;
     operation = 'update';
     if (current) endStroke(false);
-    try { await store.flush(); return true; }
+    try { await flushAll(); return true; }
     catch (e) { operation = null; throw e; }
   }, error).catch(error);
 }

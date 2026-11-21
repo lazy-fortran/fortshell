@@ -102,6 +102,24 @@ program test_document
     if (fs_stroke_page(id)/=4) error stop 'ink of a later page moves with it'
     if (fs_insert_page(6)/=0 .or. fs_insert_page(0)/=0) error stop 'insertion outside the notebook refused'
     if (fs_insert_page(5)/=5 .or. fs_pages(0)/=5) error stop 'insertion at the end appends'
+    ! Documents keep their pages, ink and undo history while another is shown.
+    call fs_reset()
+    n = fs_pages(2)
+    id = fs_begin(1.0_c_float,0,0)
+    input(:,1) = [10.,20.,0.,0.5]
+    input(:,2) = [11.,21.,0.01,0.5]
+    n = fs_append(2)
+    n = fs_finish(0)
+    if (fs_select(2)/=2 .or. fs_count()/=0 .or. fs_pages(0)/=1) error stop 'new document is empty'
+    id = fs_begin(1.0_c_float,0,0)
+    n = fs_finish(0)
+    id = fs_begin(1.0_c_float,0,0)
+    n = fs_finish(0)
+    if (fs_select(1)/=1 .or. fs_count()/=1 .or. fs_pages(0)/=2) error stop 'first document restored'
+    if (fs_can_undo()==0) error stop 'undo history kept'
+    if (fs_select(2)/=2 .or. fs_count()/=2) error stop 'second document restored'
+    if (fs_select(65)/=0 .or. fs_count()/=2) error stop 'document outside the range refused'
+    n = fs_select(1)
     n = fs_pages(100000)
     if (fs_insert_page(1)/=0) error stop 'no insertion beyond the page limit'
     call fs_page(100000)

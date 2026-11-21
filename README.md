@@ -5,6 +5,10 @@ A browser ink notebook with a Fortran document model and
 [Source](https://code.tugraz.at/yard/fortshell).
 [Open the notebook](https://ink.sloppy.at/).
 
+Several documents stay open at once, for example a deck and a whiteboard per
+course. **Doc <** and **Doc >** or Shift+Left and Shift+Right switch between
+them without loading, and **New doc** starts another. Opening a file starts a
+new document unless the shown one is empty.
 Write on an A4 landscape page, advance past the final page to create another,
 insert a blank page after the shown one, for example between slides of a deck,
 annotate a PDF, or export a vector PDF and an editable `.fortshell` notebook.
@@ -72,7 +76,7 @@ loads an available application update without closing the notebook.
 
 JavaScript handles browser events, graphics APIs, storage, and the PDF
 libraries. PDF.js renders imported pages. pdf-lib preserves original PDF page
-content and adds vector ink. The app imports one working notebook at a time.
+content and adds vector ink.
 
 **Ink comparison**, in the overflow menu with Clear page, offers the same model in JavaScript and Fortran WebAssembly,
 raw input, and the independent perfect-freehand outline as a Canvas 2D
@@ -158,8 +162,8 @@ The status indicator shows **Saved** once the server holds everything,
 **Saved locally** with the number of batches waiting for the server otherwise,
 and a sign-in note for a browser without a session. Browser storage alone
 remains subject to platform eviction. Download **Notebook**
-for a portable editable copy. Opening material replaces the current working
-notebook. Export the current notebook before opening another.
+for a portable editable copy. Each document has its own browser database and
+its own server log.
 
 The `.fortshell` format is versioned JSON containing page dimensions in
 millimetres, stroke metadata, raw samples `[x, y, seconds, pressure]`, and an

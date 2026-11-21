@@ -8,7 +8,7 @@ module fortshell_document
         fs_page, fs_next, fs_previous, fs_visible, fs_toggle, fs_undo, fs_redo, &
         fs_size, fs_data, fs_meta, fs_input, fs_output, fs_width, fs_tool, &
         fs_dimensions, fs_set_dimensions, fs_stroke_page, fs_can_undo, fs_can_redo, fs_colour, &
-        fs_group, fs_copy, fs_insert_page
+        fs_group, fs_copy, fs_insert_page, fs_select
     ! Pen colours are indices into the host's palette.
     integer, parameter, public :: FS_COLOURS = 6
     integer, parameter :: BATCH = 2048
@@ -29,7 +29,51 @@ module fortshell_document
     integer(c_int), save :: tool = 0, pen_colour = 0
     real(c_float), save :: pen_width = 1.5
     type(ink_state_t), save :: ink
+    ! Documents not shown keep their state here; fs_select swaps it in.
+    type :: document_t
+        type(stroke_t), allocatable :: strokes(:)
+        real(c_float), allocatable :: dimensions(:, :)
+        integer, allocatable :: history(:, :)
+        integer :: stroke_count = 0, current_page = 1, page_count = 1
+        integer :: history_head = 0, history_count = 0, group = 0, groups = 0
+    end type
+    type(document_t), allocatable, save :: documents(:)
+    integer, save :: selected = 1
 contains
+    integer(c_int) function fs_select(k) bind(C)
+        !! Shows document `k` (1 to 64), a new empty one the first time. Pen
+        !! settings stay. The swap moves allocations, so its cost does not
+        !! grow with the documents. Returns k, or 0 during a stroke.
+        integer(c_int), value :: k
+        fs_select = 0
+        if (active /= 0 .or. k < 1 .or. k > 64) return
+        if (.not. allocated(strokes)) call fs_reset()
+        if (.not. allocated(documents)) allocate(documents(64))
+        fs_select = k
+        if (k == selected) return
+        associate(d => documents(selected))
+            call move_alloc(strokes, d%strokes)
+            call move_alloc(dimensions, d%dimensions)
+            call move_alloc(history, d%history)
+            d%stroke_count = stroke_count; d%current_page = current_page
+            d%page_count = page_count; d%history_head = history_head
+            d%history_count = history_count; d%group = group; d%groups = groups
+        end associate
+        selected = k
+        associate(d => documents(k))
+            if (.not. allocated(d%strokes)) then
+                call fs_reset()
+                return
+            end if
+            call move_alloc(d%strokes, strokes)
+            call move_alloc(d%dimensions, dimensions)
+            call move_alloc(d%history, history)
+            stroke_count = d%stroke_count; current_page = d%current_page
+            page_count = d%page_count; history_head = d%history_head
+            history_count = d%history_count; group = d%group; groups = d%groups
+        end associate
+    end function
+
     subroutine fs_reset() bind(C)
         if (allocated(strokes)) deallocate(strokes)
         if (allocated(history)) deallocate(history)

@@ -92,10 +92,10 @@ export class ServerSync {
     this.assembling = new Map();
     this.delay = 1000; this.sending = null; this.signedOut = false; this.disabled = false; this.started = false;
   }
-  static async open(db, callbacks) {
+  static async open(db, doc, callbacks) {
     let state = await db.call('get', { store: 'sync', key: 'state' });
     if (!state) {
-      state = { doc: 'notebook', client: crypto.randomUUID(), next: 1, offset: 0 };
+      state = { doc, client: crypto.randomUUID(), next: 1, offset: 0 };
       await db.call('write', [{ store: 'sync', key: 'state', value: state }]);
     }
     return new ServerSync(db, state, callbacks);
