@@ -25,6 +25,10 @@ contains
         if (button('previous','Prev',enabled=fs_current()>1)) call change_page(-1)
         call text(ui_str(fs_current())//' / '//ui_str(fs_pages(0)),id='page-count')
         if (button('next',merge('New ','Next',fs_current()==fs_pages(0)))) call change_page(1)
+        if (button('insert','Insert')) then
+            id = fs_insert_page(fs_current()+1)
+            if (id /= 0) call host_action(6,id)
+        end if
         call row_end()
 
         tool = fs_tool(-1)

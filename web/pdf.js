@@ -44,13 +44,15 @@ export async function exportPDF(snapshot, strokes) {
   const { PDFDocument, rgb, pushGraphicsState, popGraphicsState, concatTransformationMatrix } = await import('pdf-lib');
   const doc = await PDFDocument.create();
   const original = snapshot.pdf ? await PDFDocument.load(snapshot.pdf) : null;
-  if (original) {
-    const pages = await doc.copyPages(original, original.getPageIndices());
-    for (const page of pages) doc.addPage(page);
-  }
+  const count = original ? original.getPageCount() : 0;
+  const sources = snapshot.meta.sources || snapshot.meta.pages.map((_, i) => i < count ? i + 1 : 0);
+  const used = sources.filter(k => k > 0 && k <= count).map(k => k - 1);
+  const copies = original && used.length ? await doc.copyPages(original, used) : [];
+  let next = 0;
   for (let i = 0; i < snapshot.meta.pages.length; i++) {
     const [w, h] = snapshot.meta.pages[i];
-    if (i >= doc.getPageCount()) doc.addPage([w * MM, h * MM]);
+    if (sources[i] > 0 && sources[i] <= count) doc.addPage(copies[next++]);
+    else doc.addPage([w * MM, h * MM]);
     const page = doc.getPage(i);
     const { x, y, width, height } = page.getCropBox();
     const rotation = ((page.getRotation().angle % 360) + 360) % 360;

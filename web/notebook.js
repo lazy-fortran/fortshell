@@ -3,6 +3,8 @@ import { GEOMETRY_REVISION, LEGACY_GEOMETRY, INK_COLOURS } from './geometry.js';
 export function validateSnapshot(s) {
   if (s.meta?.version !== 1 || !Array.isArray(s.meta.pages) || !s.meta.pages.length
       || s.meta.pages.length > 100000 || !Array.isArray(s.strokes) || !Array.isArray(s.chunks)) throw new Error('Unsupported notebook');
+  if (s.meta.sources !== undefined && (!Array.isArray(s.meta.sources) || s.meta.sources.length !== s.meta.pages.length
+      || s.meta.sources.some(k => !Number.isInteger(k) || k < 0))) throw new Error('Invalid page sources');
   for (const size of s.meta.pages) if (size.length !== 2 || size.some(x => !Number.isFinite(x) || x <= 0 || x > 10000)) throw new Error('Invalid page dimensions');
   const ids = new Map();
   for (const stroke of s.strokes) {

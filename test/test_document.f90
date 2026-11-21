@@ -88,7 +88,22 @@ program test_document
         call c_f_pointer(fs_data(int(i,c_int),0),data,[4,500])
         if (any(data(1,:)/=real(i,c_float))) error stop 'growth preserves earlier strokes'
     end do
+    ! A page inserted between others takes the shown page's size and moves later ink.
+    call fs_reset()
+    n = fs_pages(3)
+    call fs_set_dimensions(2,210.0_c_float,297.0_c_float)
+    call fs_page(3)
+    id = fs_begin(1.0_c_float,0,0)
+    n = fs_finish(0)
+    call fs_page(2)
+    if (fs_insert_page(3)/=3 .or. fs_pages(0)/=4 .or. fs_current()/=3) error stop 'page inserted'
+    if (fs_dimensions(3,1)/=210 .or. fs_dimensions(3,2)/=297) error stop 'inserted page takes the shown size'
+    if (fs_dimensions(4,1)/=297) error stop 'later page keeps its size'
+    if (fs_stroke_page(id)/=4) error stop 'ink of a later page moves with it'
+    if (fs_insert_page(6)/=0 .or. fs_insert_page(0)/=0) error stop 'insertion outside the notebook refused'
+    if (fs_insert_page(5)/=5 .or. fs_pages(0)/=5) error stop 'insertion at the end appends'
     n = fs_pages(100000)
+    if (fs_insert_page(1)/=0) error stop 'no insertion beyond the page limit'
     call fs_page(100000)
     call fs_next()
     if (fs_current()/=fs_pages(0)) error stop 'page limit remains addressable'

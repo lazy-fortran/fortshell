@@ -8,7 +8,7 @@ module fortshell_document
         fs_page, fs_next, fs_previous, fs_visible, fs_toggle, fs_undo, fs_redo, &
         fs_size, fs_data, fs_meta, fs_input, fs_output, fs_width, fs_tool, &
         fs_dimensions, fs_set_dimensions, fs_stroke_page, fs_can_undo, fs_can_redo, fs_colour, &
-        fs_group, fs_copy
+        fs_group, fs_copy, fs_insert_page
     ! Pen colours are indices into the host's palette.
     integer, parameter, public :: FS_COLOURS = 6
     integer, parameter :: BATCH = 2048
@@ -356,6 +356,29 @@ contains
         fs_dimensions = 0
         if (page < 1 .or. page > page_count .or. axis < 1 .or. axis > 2) return
         fs_dimensions = dimensions(axis,page)
+    end function
+
+    integer(c_int) function fs_insert_page(at) bind(C)
+        !! Inserts a blank page of the shown page's size before page `at`
+        !! (page_count+1 appends) and shows it. Ink of later pages moves with
+        !! its page. Returns the new page, or 0 during a stroke or at the limit.
+        integer(c_int), value :: at
+        integer(c_int) :: old
+        real(c_float) :: size_(2)
+        integer :: k
+        fs_insert_page = 0
+        if (.not. allocated(strokes)) call fs_reset()
+        old = page_count
+        if (active /= 0 .or. at < 1 .or. at > old + 1) return
+        size_ = dimensions(:,current_page)
+        if (fs_pages(old + 1) /= old + 1) return
+        dimensions(:,at+1:old+1) = dimensions(:,at:old)
+        dimensions(:,at) = size_
+        do k = 1, stroke_count
+            if (strokes(k)%page >= at) strokes(k)%page = strokes(k)%page + 1
+        end do
+        current_page = at
+        fs_insert_page = at
     end function
 
     subroutine fs_set_dimensions(page, width, height) bind(C)

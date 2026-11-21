@@ -16,6 +16,9 @@ const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 let M, store, committed, activeRenderer, surface, current = 0, drawn = 0, frame = 0;
 let engine = 'wasm', renderer = 'canvas', model = new InkModel(), predictions = [];
 let pdf = null, pdfBytes = null, pdfPages = 0, pageRevision = 0, zoom = 1, ready = false;
+// PDF page shown under each page, 0 for blank; null keeps the original order.
+let sources = null;
+const source = page => sources ? sources[page - 1] || 0 : (page <= pdfPages ? page : 0);
 let renderGeneration = 0, changing = Promise.resolve(), imports = Promise.resolve();
 const saved = new Map(), strokeGeometry = new Map();
 let eraserTargets = [], eraserContext;
@@ -38,8 +41,10 @@ function strokeMeta(id, complete = true) {
     engine: M._fs_meta(id, 2), geometry: geometry(id), visible: !!M._fs_visible(id), complete, n: M._fs_size(id) };
 }
 function metadata() {
+  const pages = M._fs_pages(0);
   return { version: 1, title: $('title').value, current: M._fs_current(), pdfPages,
-    pages: Array.from({ length: M._fs_pages(0) }, (_, i) => pageSize(i + 1)),
+    pages: Array.from({ length: pages }, (_, i) => pageSize(i + 1)),
+    sources: Array.from({ length: pages }, (_, i) => source(i + 1)),
     pen: { tool: M._fs_tool(-1), colour: M._fs_colour(-1), width: M._fs_width(0) } };
 }
 function checkpointPage(page) {
@@ -115,7 +120,7 @@ async function renderPage() {
   }
   $('overlay').width = Math.max(1, Math.ceil(cssWidth * dpr)); $('overlay').height = Math.max(1, Math.ceil(cssHeight * dpr));
   drawOverlay();
-  if (pdf && page <= pdfPages) await renderPDF(pdf, page, $('background'), Math.ceil(cssWidth * dpr));
+  if (pdf && source(page)) await renderPDF(pdf, source(page), $('background'), Math.ceil(cssWidth * dpr));
   else $('background').width = $('background').height = 1;
   if (generation !== renderGeneration) return;
   surface = new PointerSurface($('active'), { start: startStroke, samples: appendSamples,
@@ -479,6 +484,7 @@ async function restore(s) {
   $('title').value = String(s.meta.title || 'Untitled notebook');
   if (pdf) await pdf.destroy();
   pdf = nextPDF; pdfBytes = s.pdf || null; pdfPages = nextPDF?.numPages || 0;
+  sources = s.meta.sources ? s.meta.sources.slice() : null;
   refreshControls(); await requestPage();
 }
 async function importFile(file) {
@@ -532,6 +538,13 @@ async function exportDocument() {
 globalThis.fortshellHost = (action, id) => {
   if (!ready) return;
   if (action === 1) { metaChanged(); void requestPage(); }
+  if (action === 6 && id) {
+    // A blank page before page `id`: later pages and their ink move back.
+    sources = Array.from({ length: M._fs_pages(0) - 1 }, (_, i) => source(i + 1));
+    sources.splice(id - 1, 0, 0);
+    for (let k = 1; k <= M._fs_count(); k++) if (M._fs_stroke_page(k) > id) store.put('strokes', k, strokeMeta(k, true));
+    clearSelection(); metaChanged(); void requestPage();
+  }
   if (action === 2 && id) { clearSelection(); checkpointPage(M._fs_stroke_page(id)); void requestPage(); }
   if (action === 1) clearSelection();
   if (action === 4) void exportDocument().catch(error);

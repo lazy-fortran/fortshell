@@ -456,6 +456,35 @@ test('PDF annotation preserves the original page and adds landscape teaching pag
   expect(out.getPage(0).node.Contents()).toBeTruthy();
 });
 
+test('a blank page inserted between deck pages moves later pages and their ink', async ({ page }) => {
+  const pdf = await PDFDocument.create();
+  pdf.addPage([600, 400]); pdf.addPage([500, 300]);
+  await open(page);
+  const revision = await page.evaluate(() => window.fortshell.pageRevision);
+  await page.locator('#file').setInputFiles({ name: 'deck.pdf', mimeType: 'application/pdf', buffer: Buffer.from(await pdf.save()) });
+  await page.waitForFunction(r => window.fortshell.pageRevision > r, revision);
+  const shown = await page.evaluate(() => window.fortshell.pageRevision);
+  await page.locator('[data-id=next]').click();
+  await page.waitForFunction(r => window.fortshell.pageRevision > r, shown);
+  await draw(page);
+  await page.locator('[data-id=previous]').click();
+  await expect(page.locator('[data-id=page-count]')).toHaveText('1 / 2');
+  await page.locator('[data-id=insert]').click();
+  await expect(page.locator('[data-id=page-count]')).toHaveText('2 / 3');
+  await expect.poll(() => page.evaluate(() => document.getElementById('background').width)).toBe(1);
+  const meta = await page.evaluate(() => window.fortshell.snapshot().meta);
+  expect(meta.sources).toEqual([1, 0, 2]);
+  expect(meta.pages[1][0]).toBeCloseTo(600 * 25.4 / 72, 3);
+  expect(await page.evaluate(() => window.fortshell.module._fs_stroke_page(1))).toBe(3);
+  await page.evaluate(() => window.fortshell.flush());
+  await page.reload(); await page.waitForFunction(() => window.fortshell?.ready);
+  expect((await page.evaluate(() => window.fortshell.snapshot().meta)).sources).toEqual([1, 0, 2]);
+  expect(await page.evaluate(() => window.fortshell.module._fs_stroke_page(1))).toBe(3);
+  const [download] = await Promise.all([page.waitForEvent('download'), page.locator('[data-id=export]').click()]);
+  const out = await PDFDocument.load(await readFile(await download.path()));
+  expect(out.getPages().map(p => Math.round(p.getWidth()))).toEqual([600, 600, 500]);
+});
+
 test('language parity and coalesced batch sizes', async ({ page }) => {
   await open(page);
   const report = await page.evaluate(() => {

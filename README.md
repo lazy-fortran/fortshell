@@ -6,6 +6,7 @@ A browser ink notebook with a Fortran document model and
 [Open the notebook](https://ink.sloppy.at/).
 
 Write on an A4 landscape page, advance past the final page to create another,
+insert a blank page after the shown one, for example between slides of a deck,
 annotate a PDF, or export a vector PDF and an editable `.fortshell` notebook.
 Undo, redo, stroke erasing, a lasso that selects strokes to move or delete,
 pressure, zoom, and immediate keyboard command entry are available. Pens and
