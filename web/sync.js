@@ -176,7 +176,11 @@ export class ServerSync {
     // One stream per page serves every open document: each holds a server process.
     if (!events) {
       events = new EventSource('/api/events');
-      events.addEventListener('doc', event => { for (const listener of listeners) listener(JSON.parse(event.data)); });
+      events.addEventListener('doc', event => {
+        const change = JSON.parse(event.data);
+        for (const listener of listeners) listener(change);
+        ServerSync.announced?.(change.id);
+      });
       events.onerror = () => { for (const sync of syncs) sync.kick(); };
     }
     syncs.add(this);

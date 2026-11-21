@@ -68,7 +68,7 @@ test('ink is saved on the server, reaches a second device and survives going off
   await other.waitForFunction(() => window.fortshell?.ready);
   await expect.poll(() => strokes(other)).toBe(await strokes(page));
 
-  // A document made on the tablet appears on the desk after a reload, and
+  // A document made on the tablet appears on the open desk, and
   // opening it there writes nothing of its own over it.
   const shown = () => page.evaluate(() => window.fortshell.pageRevision);
   let r = await shown();
@@ -77,9 +77,7 @@ test('ink is saved on the server, reaches a second device and survives going off
   await draw(page);
   await page.evaluate(() => window.fortshell.flush());
   await expect(status(page)).toHaveText('Saved', { timeout: 10000 });
-  await other.reload(); await other.waitForFunction(() => window.fortshell?.ready);
-  await expect.poll(() => other.evaluate(async () => Object.keys((await (await fetch('/api/docs')).json()).docs).length)).toBe(2);
-  await other.reload(); await other.waitForFunction(() => window.fortshell?.ready);
+  await expect.poll(() => other.evaluate(() => window.fortshell.listed), { timeout: 10000 }).toBe(2);
   r = await other.evaluate(() => window.fortshell.pageRevision);
   await other.locator('[data-id=document-next]').click();
   await other.waitForFunction(r => window.fortshell.pageRevision > r, r);

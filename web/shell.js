@@ -3,6 +3,7 @@ import { InkModel } from 'fortink/model';
 import { createRenderer, minimumDotRadius } from './renderers.js';
 import { InkShape, inkColour, GEOMETRY_REVISION, LEGACY_GEOMETRY } from './geometry.js';
 import { NotebookStore } from './storage.js';
+import { ServerSync } from './sync.js';
 import { openPDF, renderPDF, exportPDF } from './pdf.js';
 import { runBenchmark } from './benchmark.js';
 import { perfectOutline } from './perfect.js';
@@ -667,7 +668,10 @@ async function boot() {
   if (fresh) metaChanged();
   if (s.meta) void store.sync?.start().catch(error);
   listed = (await home.store.get('documents')) || [first];
-  void discover().catch(error);
+  // The list is asked for once signed in, and a document another device
+  // creates later arrives with its first change event.
+  ServerSync.announced = id => { if (!listed.some(e => e.id === id)) void discover().catch(error); };
+  void (store.sync?.start() || Promise.resolve()).then(discover).catch(error);
   for (const type of ['click', 'input', 'change']) {
     $('controls').addEventListener(type, () => { controlsDirty = true; }, true);
   }
@@ -884,7 +888,7 @@ async function boot() {
   };
   $('results-download').onclick = () => download(JSON.stringify(results, null, 2), 'fortshell-benchmark.json', 'application/json');
   globalThis.fortshell = { module: M, store, snapshot, restore, requestPage, exportDocument, exportNotebook,
-    importFile, flush: () => flushAll(), present, get ready() { return ready; }, get pageRevision() { return pageRevision; },
+    importFile, flush: () => flushAll(), present, get listed() { return listed.length; }, get ready() { return ready; }, get pageRevision() { return pageRevision; },
     get busy() { return !!operation || !surface; },
     latencyReport: () => profiler?.report() || latencyResults,
     get engine() { return engine; }, get renderer() { return renderer; } };
