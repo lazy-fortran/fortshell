@@ -12,6 +12,7 @@ program test_document
     if (fs_pages(0)/=2 .or. fs_current()/=2) error stop 'instant next page'
     call fs_previous()
     if (fs_colour(-1)/=0) error stop 'black pen by default'
+    if (fs_tool(3)/=3 .or. fs_tool(4)/=3 .or. fs_tool(0)/=0) error stop 'pointer tool and range'
     if (fs_colour(2)/=2 .or. fs_colour(FS_COLOURS)/=2) error stop 'pen colour selection'
     if (fs_begin(0.65_c_float,FS_COLOURS,0)/=0) error stop 'colour outside the palette'
     id = fs_begin(0.65_c_float,2,0)

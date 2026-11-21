@@ -9,6 +9,10 @@ Several documents stay open at once, for example a deck and a whiteboard per
 course. **Doc <** and **Doc >** or Shift+Left and Shift+Right switch between
 them without loading, and **New doc** starts another. Opening a file starts a
 new document unless the shown one is empty.
+Toolbar buttons are symbols whose names appear as tooltips. The pointer tool
+(↖) clicks instead of writing: a link in a PDF opens in a new tab, and a course
+widget runs live over its page until closed with ✕ or Escape. A finger tap
+opens a link with any tool.
 **Present** hides every control and fits the page to the screen, on black.
 The pen still writes, a short horizontal finger swipe turns the page and a
 swipe held over 0.6 s changes the document. Escape or a tap on the top edge

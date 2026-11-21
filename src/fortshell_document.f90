@@ -385,7 +385,8 @@ contains
 
     integer(c_int) function fs_tool(value) bind(C)
         integer(c_int), value :: value
-        if (value >= 0 .and. value <= 2) tool = value
+        ! 0 pen, 1 eraser, 2 lasso, 3 pointer (clicks instead of writing).
+        if (value >= 0 .and. value <= 3) tool = value
         fs_tool = tool
     end function
 

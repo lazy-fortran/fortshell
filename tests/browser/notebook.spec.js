@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { PDFDocument, rgb, degrees } from 'pdf-lib';
+import { PDFDocument, PDFName, PDFString, rgb, degrees } from 'pdf-lib';
 import { readFile } from 'node:fs/promises';
 import { createNotebookServer } from '../../tools/serve.mjs';
 
@@ -555,6 +555,39 @@ test('presenting hides the controls, fills the screen, writes and swipes', async
   await page.locator('#workspace').focus();
   await after(() => page.keyboard.press('Escape'));
   await expect(page.locator('header')).toBeVisible();
+});
+
+test('the pointer tool clicks PDF links: widgets open over the page, other links in a tab', async ({ page }) => {
+  const widget = 'https://krystophny.github.io/fusion-skript/notebooks/slide-test.html';
+  await page.route('https://krystophny.github.io/**', r => r.fulfill({ contentType: 'text/html', body: '<p id="w">live widget</p>' }));
+  await page.route('https://example.org/**', r => r.fulfill({ contentType: 'text/html', body: 'paper' }));
+  const pdf = await PDFDocument.create(), slide = pdf.addPage([600, 400]);
+  const link = (rect, url) => pdf.context.register(pdf.context.obj({ Type: 'Annot', Subtype: 'Link', Rect: rect,
+    Border: [0, 0, 0], A: { Type: 'Action', S: 'URI', URI: PDFString.of(url) } }));
+  slide.node.set(PDFName.of('Annots'), pdf.context.obj([link([50, 250, 250, 350], widget), link([350, 50, 550, 150], 'https://example.org/paper')]));
+  await open(page);
+  const revision = await page.evaluate(() => window.fortshell.pageRevision);
+  await page.locator('#file').setInputFiles({ name: 'deck.pdf', mimeType: 'application/pdf', buffer: Buffer.from(await pdf.save()) });
+  await page.waitForFunction(r => window.fortshell.pageRevision > r, revision);
+  await expect(page.locator('#links a')).toHaveCount(2);
+  await expect(page.locator('[data-id=pen]')).toHaveAttribute('title', 'Pen');
+  const box = await page.locator('#paper').boundingBox();
+  const at = (fx, fy) => [box.x + box.width * fx, box.y + box.height * fy];
+  // With the pen, a click on a link writes and opens nothing.
+  await page.mouse.click(...at(0.25, 0.25));
+  await page.waitForFunction(() => window.fortshell.module._fs_count() >= 1);
+  await expect(page.locator('#widget')).toBeHidden();
+  await page.locator('[data-id=pointer]').click();
+  await expect(page.locator('body')).toHaveClass(/pointer/);
+  await page.mouse.click(...at(0.25, 0.25));
+  await expect(page.locator('#widget')).toBeVisible();
+  await expect(page.frameLocator('#widget iframe').locator('#w')).toHaveText('live widget');
+  expect(await page.evaluate(() => window.fortshell.module._fs_count())).toBe(1);
+  await page.locator('#widget-close').click();
+  await expect(page.locator('#widget')).toBeHidden();
+  const [tab] = await Promise.all([page.waitForEvent('popup'), page.mouse.click(...at(0.75, 0.75))]);
+  expect(tab.url()).toBe('https://example.org/paper');
+  await expect(page.locator('#widget')).toBeHidden();
 });
 
 test('language parity and coalesced batch sizes', async ({ page }) => {

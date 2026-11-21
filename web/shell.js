@@ -4,7 +4,7 @@ import { createRenderer, minimumDotRadius } from './renderers.js';
 import { InkShape, inkColour, GEOMETRY_REVISION, LEGACY_GEOMETRY } from './geometry.js';
 import { NotebookStore } from './storage.js';
 import { ServerSync } from './sync.js';
-import { openPDF, renderPDF, exportPDF } from './pdf.js';
+import { openPDF, renderPDF, exportPDF, pdfLinks } from './pdf.js';
 import { runBenchmark } from './benchmark.js';
 import { perfectOutline } from './perfect.js';
 import { validateSnapshot } from './notebook.js';
@@ -125,6 +125,7 @@ async function renderPage() {
   drawOverlay();
   if (pdf && source(page)) await renderPDF(pdf, source(page), $('background'), Math.ceil(cssWidth * dpr));
   else $('background').width = $('background').height = 1;
+  await showLinks(pdf && source(page) ? await pdfLinks(pdf, source(page)) : []);
   if (generation !== renderGeneration) return;
   surface = new PointerSurface($('active'), { start: startStroke, samples: appendSamples,
     end: endStroke });
@@ -188,6 +189,8 @@ function startStroke(e) {
   if (document.activeElement?.matches('input,textarea,[contenteditable]')) document.activeElement.blur();
   getSelection()?.removeAllRanges();
   $('prompt').hidden = true;
+  // The pointer tool clicks links and widgets; it never writes.
+  if (M._fs_tool(-1) === 3) return false;
   if (M._fs_tool(-1) === 2 && e.button !== 5) {
     const [x, y] = coordinates(e);
     if (selection && x >= selection.bounds[0] && x <= selection.bounds[2]
@@ -540,6 +543,36 @@ async function exportDocument() {
   } finally { operation = null; }
 }
 
+// Links of the shown PDF page. Course widgets open live over the page; other
+// links open in a new tab, so the notebook stays where it is.
+const WIDGET = /^https:\/\/krystophny\.github\.io\/[^/]+\/notebooks\/[^?#]+\.html/;
+async function showLinks(links) {
+  $('links').replaceChildren(...links.map(([x, y, w, h, url]) => {
+    const a = document.createElement('a');
+    a.href = url; a.target = '_blank'; a.rel = 'noopener noreferrer'; a.title = url;
+    Object.assign(a.style, { left: `${100 * x}%`, top: `${100 * y}%`, width: `${100 * w}%`, height: `${100 * h}%` });
+    a.addEventListener('click', e => { e.preventDefault(); openLink(url); });
+    return a;
+  }));
+  closeWidget();
+}
+function openLink(url) {
+  if (WIDGET.test(url)) { $('widget').querySelector('iframe').src = url; $('widget').hidden = false; }
+  else window.open(url, '_blank', 'noopener,noreferrer');
+}
+// Links take clicks only while the pointer tool is selected.
+function showTool() { document.body.classList.toggle('pointer', M._fs_tool(-1) === 3); }
+function closeWidget() {
+  if ($('widget').hidden) return;
+  $('widget').hidden = true; $('widget').querySelector('iframe').src = 'about:blank';
+}
+// A finger tap on a link opens it with any tool.
+function tapLink(x, y) {
+  const a = document.elementsFromPoint(x, y).find(el => el.parentElement === $('links'));
+  if (a) openLink(a.href);
+  return !!a;
+}
+
 // Open documents stay resident: each keeps its Fortran slot, database,
 // server sync, PDF and render state, so switching shows it without loading.
 const documents = [];
@@ -636,6 +669,7 @@ globalThis.fortshellHost = (action, id) => {
   if (action === 1) { metaChanged(); void requestPage(); }
   if (action === 7) void newDocument().catch(error);
   if (action === 9) present(true);
+  if (action === 10) showTool();
   if (action === 8) void cycle(id).catch(error);
   if (action === 6 && id) {
     // A blank page before page `id`: later pages and their ink move back.
@@ -667,6 +701,8 @@ async function boot() {
   $('save-status').textContent = 'Saved locally';
   if (fresh) metaChanged();
   if (s.meta) void store.sync?.start().catch(error);
+  showTool();
+  $('widget-close').onclick = closeWidget;
   listed = (await home.store.get('documents')) || [first];
   // The list is asked for once signed in, and a document another device
   // creates later arrives with its first change event.
@@ -679,7 +715,7 @@ async function boot() {
   // midpoint. The page scales visually during the gesture and is rendered at
   // the new zoom when it ends.
   const touches = new Map();
-  let pinch = null, swipe = null;
+  let pinch = null, swipe = null, tap = null;
   const presentingFit = () => document.body.classList.contains('presenting') && zoom === 1;
   const touchGesture = event => {
     const ws = $('workspace');
@@ -702,6 +738,10 @@ async function boot() {
     } else if (event.type === 'pointermove' && !pinch && before && !swipe) {
       ws.scrollLeft -= event.clientX - before[0]; ws.scrollTop -= event.clientY - before[1];
     }
+    if (event.type === 'pointerdown' && touches.size === 1) tap = { x: event.clientX, y: event.clientY };
+    if (event.type === 'pointerup' && tap && touches.size <= 1
+        && Math.hypot(event.clientX - tap.x, event.clientY - tap.y) < 10 && !pinch) tapLink(event.clientX, event.clientY);
+    if (event.type === 'pointerup' || event.type === 'pointercancel' || touches.size > 1) tap = null;
     if (event.type === 'pointerdown' && touches.size === 1 && presentingFit())
       swipe = { x: event.clientX, y: event.clientY, t: event.timeStamp };
     if (touches.size > 1) swipe = null;
@@ -859,7 +899,8 @@ async function boot() {
     // The field receives the key itself, so dead keys and input methods compose there.
     if (e.key.length === 1 || e.key === 'Dead') { $('prompt').hidden = false; $('prompt-text').focus(); }
     if (e.key === 'Escape') {
-      if ($('prompt').hidden && document.body.classList.contains('presenting')) present(false);
+      if (!$('widget').hidden) closeWidget();
+      else if ($('prompt').hidden && document.body.classList.contains('presenting')) present(false);
       $('prompt').hidden = true;
     }
   });

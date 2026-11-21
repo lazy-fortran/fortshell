@@ -20,6 +20,18 @@ export async function renderPDF(pdf, number, canvas, pixelWidth) {
   await page.render({ canvasContext: canvas.getContext('2d'), viewport: scaled }).promise;
 }
 
+// Web links of a PDF page as rectangles in fractions of the page: [x, y, w, h, url].
+export async function pdfLinks(pdf, number) {
+  const page = await pdf.getPage(number), viewport = page.getViewport({ scale: 1 }), links = [];
+  for (const a of await page.getAnnotations({ intent: 'display' })) {
+    if (a.subtype !== 'Link' || !/^https?:\/\//.test(a.url || '')) continue;
+    const [x1, y1, x2, y2] = viewport.convertToViewportRectangle(a.rect);
+    links.push([Math.min(x1, x2) / viewport.width, Math.min(y1, y2) / viewport.height,
+      Math.abs(x2 - x1) / viewport.width, Math.abs(y2 - y1) / viewport.height, a.url]);
+  }
+  return links;
+}
+
 export function svgInk(input, width, revision = LEGACY_GEOMETRY) {
   const shape = new InkShape(undefined, revision); shape.update(input, 0, width);
   const f = x => Number(x.toFixed(4)), xy = values => values.map(f).join(' ');

@@ -93,3 +93,15 @@ select { border-color: var(--line); background: white; }
 /* Presenting: no chrome, the page on black, filling the screen. */
 body.presenting header { display: none; }
 body.presenting #workspace { padding: 0; background: #000; display: grid; place-items: center; }
+
+/* Links of a PDF page: clickable with the pointer tool, tappable with a finger. */
+#links { position: absolute; inset: 0; pointer-events: none; }
+#links a { position: absolute; display: block; }
+body.pointer #links a { pointer-events: auto; cursor: pointer; outline: 1px dashed rgba(0, 114, 178, 0.5); }
+body.pointer #active { cursor: default; }
+/* A course widget runs live over the page it belongs to. */
+#widget { position: absolute; inset: 0; z-index: 2; background: white; }
+#widget[hidden] { display: none; }
+#widget iframe { width: 100%; height: 100%; border: 0; }
+#widget-close { position: absolute; top: 8px; right: 8px; width: 40px; height: 40px; font-size: 20px;
+  border-radius: 20px; border: 1px solid #888; background: rgba(255, 255, 255, 0.9); }
