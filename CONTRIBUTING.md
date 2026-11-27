@@ -1,10 +1,10 @@
 # Contributions
 
-Submit a branch to [Fortyard](https://code.tugraz.at/yard/fortshell).
-Maintainers land it with `fy land`. Keep domain state and commands in Fortran,
-reusable modelling in FortInk, and reusable UI behaviour in FortUI. Browser
-adapters may use JavaScript. Do not move pointer-rate input through semantic
-toolbar composition.
+Open a pull request on GitHub. It lands through the merge queue as one squashed
+commit once its tests pass. Keep domain state and commands in Fortran, reusable
+modelling in FortInk, and reusable UI behaviour in FortUI. Browser adapters may
+use JavaScript. Do not move pointer-rate input through semantic toolbar
+composition.
 
 Run native document tests, JavaScript model tests, and the affected browser
 flows. Generate test PDFs rather than committing binary fixtures. Numerical
