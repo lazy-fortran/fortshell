@@ -176,11 +176,10 @@ keeps the poster:
 ## Serving and sync
 
 FortShell runs at ink.sloppy.at, presented from the iPad alone. One Fortran
-binary, `fortshell serve`, serves everything. Its HTTP layer comes from
-fortyard, which already serves HTTP/1.1 and server-sent events (SSE) from
+binary, `fortshell serve`, serves everything. Its HTTP layer is the
+library **fortweb**, which serves HTTP/1.1 and server-sent events (SSE) from
 Fortran over POSIX sockets through `iso_c_binding` and runs crash-isolated
-worker processes. That layer moves into its own library, **fortweb**, which
-fortyard and FortShell both depend on.
+worker processes.
 
 fortweb has no upstream dependencies: only the C library and the kernel,
 reached through `iso_c_binding`. It contains:
@@ -215,7 +214,7 @@ chain validation and no RSA.
   the course folders in Nextcloud, under their fixed names, and so into the
   student share. The server itself never connects out.
 - **Releases.** Timestamped release directories with an atomic switch, as
-  today, later with fortyard's edge and stable channels.
+  today.
 
 Slopshell stays unchanged. FortShell takes over once it covers the work.
 
@@ -223,8 +222,7 @@ Slopshell stays unchanged. FortShell takes over once it covers the work.
 
 | Repository | Change for the first slice |
 | --- | --- |
-| fortweb (new) | HTTP/1.1 parsing and responses and POSIX sockets, moved from fortyard's `fy_parser`; static files with path containment, types and validators; SSE; forked worker processes around a handler procedure; random session tokens from `getrandom`. Depends only on fx. |
-| fortyard | Uses fortweb instead of its own copies, without changing behaviour. |
+| fortweb (new) | HTTP/1.1 parsing and responses and POSIX sockets, static files with path containment, types and validators; SSE; forked worker processes around a handler procedure; random session tokens from `getrandom`. Depends only on fx. |
 | fortshell | `fortshell serve` on fortweb: static files, operation log upload, SSE, session sign-in. Client: several open documents, page references with ink, deck artifacts from presenter manifests, hidden toolbar, projector window, server sync. |
 | fortui | Nothing yet. The hidden toolbar is composed by FortShell. Floating overlays are FortUI roadmap work and are taken up when FortShell needs more than one toolbar. |
 | fortink | Nothing. |

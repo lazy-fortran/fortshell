@@ -2,7 +2,7 @@
 
 A browser ink notebook with a Fortran document model and
 [FortUI](https://github.com/lazy-fortran/fortui) controls.
-[Source](https://code.tugraz.at/yard/fortshell).
+[Source](https://github.com/lazy-fortran/fortshell).
 [Open the notebook](https://ink.sloppy.at/).
 
 Several documents stay open at once, for example a deck and a whiteboard per
@@ -73,7 +73,7 @@ an explicit skip when none is available.
 
 ## Ink and comparisons
 
-[FortInk](https://code.tugraz.at/yard/fortink) owns the pressure and position
+[FortInk](https://github.com/lazy-fortran/fortink) owns the pressure and position
 model. FortSym and FortGen generate its numerical leaf. Fortran owns strokes,
 pages, dimensions, and undo history. FortUI composes controls. Its direct
 pointer surface delivers coalesced samples without recomposing controls for
@@ -137,7 +137,7 @@ existing Certbot. `FORTSHELL_SSH_TARGET` selects the SSH destination. DNS for
 `ink.sloppy.at` must already point to that host. Deployment retains the
 previous release of the application and of the server.
 
-`fortshell serve`, built on [fortweb](https://code.tugraz.at/yard/fortweb),
+`fortshell serve`, built on [fortweb](https://github.com/lazy-fortran/fortweb),
 answers every request behind nginx: the application files and the document
 API below `/api`. Documents live in `/srv/fortshell/data`. The first
 deployment writes the login token to `/root/fortshell-login-token`. Opening
